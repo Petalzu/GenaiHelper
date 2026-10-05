@@ -21,18 +21,33 @@ The endpoint remains http://127.0.0.1:58379/v1/chat/completions with compatibili
 ## Installing from source
 
 ```bash
-git clone <this-repository>
+git clone https://github.com/Petalzu/GenaiHelper.git
 cd genai-login
 npm install
+npm test
 ```
 
-Open the folder in VS Code and press **F5** (Run Extension), or package a VSIX locally:
+Open the folder in VS Code and press **F5** to run the extension in a development window, or package a VSIX locally:
 
 ```bash
-npx @vscode/vsce package
+npx @vscode/vsce package -o genai-login.vsix
 ```
 
-Install the generated VSIX via *Extensions: Install from VSIX…*.
+Install the generated VSIX from the command line:
+
+```bash
+code --install-extension genai-login.vsix --force
+```
+
+Or via the VS Code UI: *Extensions* panel → `…` menu → *Install from VSIX…*.
+
+**Upgrading an installed version:** `--force` replaces the extension in place even when the version number is unchanged. Reload the VS Code window afterwards so the new code takes effect.
+
+**Packaging notes:**
+
+- Run `npm install` first; `vsce` resolves npm dependencies and bundles the runtime `dependencies` (`cheerio`, `playwright-core`, `tough-cookie`) into the VSIX, so the package is roughly 20–25 MB. `devDependencies` are excluded automatically.
+- Do **not** pass `--no-dependencies`: it skips dependency resolution and produces a VSIX without `node_modules`, which fails at runtime with missing-module errors.
+- `vsce` renames `README.md` → `readme.md`, `LICENSE` → `LICENSE.txt`, and `CHANGELOG.md` → `changelog.md` inside the VSIX; the content is unchanged. `test/` and local-only files are excluded via `.vscodeignore`.
 
 ## Usage
 
