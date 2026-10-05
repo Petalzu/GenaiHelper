@@ -1,0 +1,13 @@
+**
+!package.json
+!extension.js
+!auth.js
+!browser-auth.js
+!dashboard.js
+!stats.js
+!README.md
+!GENAI-README.md
+!LICENSE
+!CHANGELOG.md
+!media/**
+!node_modules/**

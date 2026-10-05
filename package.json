@@ -1,0 +1,85 @@
+{
+  "name": "genai-login",
+  "displayName": "GENAI Login",
+  "description": "Manual GENAI login and local bridge",
+  "readme": "GENAI-README.md",
+  "version": "0.0.8",
+  "publisher": "local-genai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Petalzu/GenaiHelper.git"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "genai-login",
+          "title": "GENAI",
+          "icon": "media/genai.svg"
+        }
+      ]
+    },
+    "views": {
+      "genai-login": [
+        {
+          "id": "genai-login.session",
+          "name": "GENAI Connection",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "genai-login.connect",
+        "title": "GENAI: Login and connect"
+      },
+      {
+        "command": "genai-login.credentials",
+        "title": "GENAI: Save account and password"
+      },
+      {
+        "command": "genai-login.disconnect",
+        "title": "GENAI: Disconnect"
+      },
+      {
+        "command": "genai-login.clear",
+        "title": "GENAI: Clear saved credentials and session"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint extension.js auth.js browser-auth.js dashboard.js stats.js test/extension.test.js test/stats.test.js",
+    "pretest": "npm run lint",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "1.110.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^3.9.2",
+    "eslint": "^10.5.0",
+    "globals": "^17.12.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "playwright-core": "^1.63.0",
+    "tough-cookie": "^6.0.2"
+  }
+}

@@ -1,0 +1,302 @@
+const crypto = require('node:crypto');
+
+function dashboardHtml() {
+    const nonce = crypto.randomBytes(16).toString('base64');
+    return `<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: var(--vscode-sideBar-background, #10151c);
+            --panel: var(--vscode-editorWidget-background, #1a222c);
+            --panel-strong: var(--vscode-sideBarSectionHeader-background, #202a35);
+            --text: var(--vscode-sideBar-foreground, #e8eef5);
+            --muted: var(--vscode-descriptionForeground, #8c99a8);
+            --border: var(--vscode-widget-border, rgba(150, 170, 190, 0.2));
+            --green: #43d392;
+            --blue: #6ba9ff;
+            --amber: #f3bd69;
+            --red: #f27a7a;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-width: 220px;
+            color: var(--text);
+            background: linear-gradient(160deg, var(--bg) 0%, var(--panel) 100%);
+            font-family: "Aptos", "Segoe UI", sans-serif;
+            font-size: 12px;
+        }
+        button { font: inherit; color: inherit; }
+        .shell { padding: 14px 12px 16px; }
+        .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .brand-mark {
+            display: grid;
+            width: 32px;
+            height: 32px;
+            place-items: center;
+            border: 1px solid rgba(67, 211, 146, 0.5);
+            border-radius: 9px;
+            color: #0d1c18;
+            background: var(--green);
+            font-size: 17px;
+            font-weight: 800;
+        }
+        .eyebrow { color: var(--green); font-size: 9px; font-weight: 800; letter-spacing: 1.1px; }
+        h1 { margin: 2px 0 0; font-size: 17px; letter-spacing: 0; }
+        .icon-button {
+            width: 29px;
+            height: 29px;
+            margin-left: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: transparent;
+            cursor: pointer;
+            font-size: 17px;
+            line-height: 1;
+        }
+        .icon-button:hover, .icon-button:focus-visible { border-color: var(--blue); background: rgba(107, 169, 255, 0.12); outline: none; }
+        .status-banner {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            min-height: 58px;
+            padding: 10px 11px;
+            border: 1px solid var(--border);
+            border-radius: 11px;
+            background: rgba(255, 255, 255, 0.035);
+        }
+        .status-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 4px rgba(140, 153, 168, 0.12); }
+        .status-dot.connected { background: var(--green); box-shadow: 0 0 0 4px rgba(67, 211, 146, 0.14); }
+        .status-dot.busy { background: var(--amber); box-shadow: 0 0 0 4px rgba(243, 189, 105, 0.14); }
+        .status-dot.error { background: var(--red); box-shadow: 0 0 0 4px rgba(242, 122, 122, 0.14); }
+        .status-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .status-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+        .status-copy small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .port-badge { margin-left: auto; padding: 4px 7px; border: 1px solid rgba(107, 169, 255, 0.35); border-radius: 6px; color: var(--blue); background: rgba(107, 169, 255, 0.1); font-size: 10px; white-space: nowrap; }
+        .section-label { display: flex; align-items: center; justify-content: space-between; margin: 16px 2px 7px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+        .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .metric {
+            position: relative;
+            min-width: 0;
+            min-height: 78px;
+            padding: 10px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.045);
+            cursor: default;
+            outline: none;
+            transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+        }
+        .metric:hover, .metric:focus-visible { z-index: 4; border-color: rgba(107, 169, 255, 0.6); background: rgba(107, 169, 255, 0.09); transform: translateY(-1px); }
+        .metric-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 0.7px; }
+        .metric-value { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 19px; font-weight: 750; }
+        .metric-detail { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+        .hover-card {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            z-index: 5;
+            padding: 9px 10px;
+            border: 1px solid rgba(107, 169, 255, 0.45);
+            border-radius: 8px;
+            color: var(--text);
+            background: var(--panel-strong);
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.25);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-3px);
+            transition: opacity 120ms ease, transform 120ms ease;
+        }
+        .metric:hover .hover-card, .metric:focus-visible .hover-card { opacity: 1; transform: translateY(0); }
+        .model-list { display: flex; flex-direction: column; gap: 5px; }
+        .model-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            padding: 8px 9px;
+            border-left: 2px solid var(--blue);
+            border-radius: 0 7px 7px 0;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .model-name { min-width: 0; flex: 1; overflow-wrap: anywhere; color: var(--text); }
+        .model-count { flex: 0 0 auto; color: var(--amber); font-size: 10px; }
+        .empty-models { padding: 12px 8px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); text-align: center; }
+        .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+        .action-tile {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            min-height: 48px;
+            padding: 8px 9px;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            background: rgba(255, 255, 255, 0.04);
+            cursor: pointer;
+            text-align: left;
+            transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+        }
+        .action-tile:hover, .action-tile:focus-visible { border-color: var(--blue); background: rgba(107, 169, 255, 0.1); outline: none; transform: translateY(-1px); }
+        .action-tile.primary { border-color: rgba(67, 211, 146, 0.45); }
+        .action-tile.primary:hover, .action-tile.primary:focus-visible { border-color: var(--green); background: rgba(67, 211, 146, 0.1); }
+        .action-tile.danger:hover, .action-tile.danger:focus-visible { border-color: var(--red); background: rgba(242, 122, 122, 0.1); }
+        .action-icon { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; border-radius: 6px; color: var(--blue); background: rgba(107, 169, 255, 0.13); font-size: 16px; font-weight: 700; }
+        .primary .action-icon { color: var(--green); background: rgba(67, 211, 146, 0.13); }
+        .danger .action-icon { color: var(--red); background: rgba(242, 122, 122, 0.13); }
+        .action-copy { min-width: 0; }
+        .action-copy strong, .action-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .action-copy strong { font-size: 11px; }
+        .action-copy small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+        .footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 15px; color: var(--muted); font-size: 9px; }
+        .footer button { padding: 0; border: 0; color: var(--blue); background: transparent; cursor: pointer; }
+        .footer button:hover { color: var(--text); }
+        @media (max-width: 270px) {
+            .metric-grid, .action-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <main class="shell">
+        <header class="brand">
+            <div class="brand-mark">G</div>
+            <div>
+                <div class="eyebrow">GENAI BRIDGE</div>
+                <h1>连接控制台</h1>
+            </div>
+            <button class="icon-button" data-command="refresh" title="刷新状态" aria-label="刷新状态">↻</button>
+        </header>
+        <section class="status-banner" aria-live="polite">
+            <span id="status-dot" class="status-dot"></span>
+            <div class="status-copy">
+                <strong id="status-text">未连接</strong>
+                <small id="keepalive-text">等待连接</small>
+            </div>
+            <span id="port-badge" class="port-badge">:58379</span>
+        </section>
+        <div class="section-label"><span>实时概览</span><span id="sync-text">尚未同步</span></div>
+        <section class="metric-grid">
+            <div class="metric" tabindex="0">
+                <span class="metric-label">PORT / 端口</span>
+                <strong id="port-value" class="metric-value">--</strong>
+                <small id="port-detail" class="metric-detail">等待连接</small>
+                <span class="hover-card">本地监听地址：127.0.0.1:58379</span>
+            </div>
+            <div class="metric" tabindex="0">
+                <span class="metric-label">UPTIME / 时长</span>
+                <strong id="uptime-value" class="metric-value">--</strong>
+                <small class="metric-detail">从本次连接开始</small>
+                <span class="hover-card">连接保持期间持续更新，不包含断开前的历史时长。</span>
+            </div>
+            <div class="metric" tabindex="0">
+                <span class="metric-label">REQUESTS / 请求</span>
+                <strong id="request-value" class="metric-value">0</strong>
+                <small id="request-detail" class="metric-detail">聊天请求</small>
+                <span class="hover-card">统计已转发到 GENAI 的聊天请求，不计入保活探测。</span>
+            </div>
+            <div class="metric" tabindex="0">
+                <span class="metric-label">TOKENS / 消耗</span>
+                <strong id="token-value" class="metric-value">--</strong>
+                <small id="token-detail" class="metric-detail">等待上游 usage</small>
+                <span class="hover-card">仅显示上游响应提供的 prompt_tokens 与 completion_tokens。</span>
+            </div>
+        </section>
+        <div class="section-label"><span>使用的模型</span><span id="model-count">0</span></div>
+        <section id="model-list" class="model-list"><div class="empty-models">还没有聊天请求</div></section>
+        <section class="action-grid" aria-label="连接操作">
+            <button class="action-tile primary" data-command="connect">
+                <span class="action-icon">+</span><span class="action-copy"><strong>连接 GENAI</strong><small>登录并启动桥接</small></span>
+            </button>
+            <button class="action-tile" data-command="credentials">
+                <span class="action-icon">K</span><span class="action-copy"><strong>账号设置</strong><small>更新安全凭据</small></span>
+            </button>
+            <button class="action-tile" data-command="disconnect">
+                <span class="action-icon">−</span><span class="action-copy"><strong>断开连接</strong><small>停止端口与保活</small></span>
+            </button>
+            <button class="action-tile danger" data-command="clear">
+                <span class="action-icon">×</span><span class="action-copy"><strong>清除数据</strong><small>删除账号与 Cookie</small></span>
+            </button>
+        </section>
+        <footer class="footer"><span id="last-check">保活：尚未检查</span><button data-command="refresh">刷新数据</button></footer>
+    </main>
+    <script nonce="${nonce}">
+        const vscode = acquireVsCodeApi();
+        let snapshot;
+        const byId = id => document.getElementById(id);
+        const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+        const formatNumber = value => new Intl.NumberFormat('zh-CN').format(number(value));
+        const formatTokens = value => value === null || value === undefined ? '--' : formatNumber(value);
+        const formatDuration = milliseconds => {
+            const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const rest = seconds % 60;
+            return hours ? hours + 'h ' + minutes + 'm' : minutes ? minutes + 'm ' + rest + 's' : rest + 's';
+        };
+        const formatClock = timestamp => timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
+        const connected = data => Boolean(data.connectedAt && String(data.status).startsWith('Connected'));
+        function renderModels(models) {
+            const list = byId('model-list');
+            list.replaceChildren();
+            byId('model-count').textContent = String(models.length);
+            if (!models.length) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-models';
+                empty.textContent = '还没有聊天请求';
+                list.append(empty);
+                return;
+            }
+            for (const model of models) {
+                const row = document.createElement('div');
+                row.className = 'model-row';
+                const name = document.createElement('span');
+                name.className = 'model-name';
+                name.textContent = model.name;
+                const count = document.createElement('span');
+                count.className = 'model-count';
+                count.textContent = formatNumber(model.requests) + ' 次';
+                row.append(name, count);
+                list.append(row);
+            }
+        }
+        function render(data) {
+            snapshot = data;
+            const isConnected = connected(data);
+            const statusText = String(data.status || 'Disconnected');
+            const dot = byId('status-dot');
+            dot.className = 'status-dot ' + (isConnected ? 'connected' : /auth|connect/i.test(statusText) ? 'busy' : /error|failed|retry/i.test(statusText) ? 'error' : '');
+            byId('status-text').textContent = isConnected ? '已连接' : statusText === 'Disconnected' ? '未连接' : statusText;
+            byId('port-badge').textContent = isConnected ? ':' + data.port : '未监听';
+            byId('port-value').textContent = isConnected ? String(data.port) : '--';
+            byId('port-detail').textContent = isConnected ? '127.0.0.1' : '等待连接';
+            byId('request-value').textContent = formatNumber(data.requests);
+            byId('request-detail').textContent = data.requests ? '已转发聊天请求' : '暂无聊天请求';
+            const hasUsage = number(data.usageReports) > 0;
+            byId('token-value').textContent = hasUsage ? formatTokens(number(data.tokensIn) + number(data.tokensOut)) : '--';
+            byId('token-detail').textContent = hasUsage ? formatTokens(data.tokensIn) + ' in · ' + formatTokens(data.tokensOut) + ' out' : data.usageMissing ? '上游未返回 usage' : '等待上游 usage';
+            const keepalive = data.keepalive || {};
+            byId('keepalive-text').textContent = keepalive.state === 'healthy' ? '每 60s 检查 Cookie' : keepalive.state === 'checking' ? '正在检查 Cookie' : keepalive.state === 'reauthenticating' ? 'Cookie 过期，正在重认证' : isConnected ? '等待首次保活检查' : '等待连接';
+            byId('last-check').textContent = keepalive.lastCheckAt ? '上次保活 ' + formatClock(keepalive.lastCheckAt) : '保活：尚未检查';
+            byId('sync-text').textContent = '同步 ' + formatClock(Date.now());
+            byId('uptime-value').textContent = isConnected ? formatDuration(Date.now() - data.connectedAt) : '--';
+            renderModels(Array.isArray(data.models) ? data.models : []);
+        }
+        document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => vscode.postMessage({ command: button.dataset.command })));
+        window.addEventListener('message', event => { if (event.data && event.data.type === 'state') render(event.data.data); });
+        setInterval(() => {
+            if (!snapshot || !connected(snapshot)) return;
+            byId('uptime-value').textContent = formatDuration(Date.now() - snapshot.connectedAt);
+        }, 1000);
+        vscode.postMessage({ command: 'ready' });
+    </script>
+</body>
+</html>`;
+}
+
+module.exports = { dashboardHtml };
