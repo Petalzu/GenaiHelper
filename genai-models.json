@@ -1,0 +1,99 @@
+{
+	"name": "GENAI Chat",
+	"vendor": "customendpoint",
+	"apiKey": "local-browser-session",
+	"apiType": "chat-completions",
+	"models": [
+		{
+			"id": "gemma-4-31B-it",
+			"name": "GENAI / gemma-4-31B-it",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": true,
+			"thinking": false,
+			"maxInputTokens": 147232,
+			"maxOutputTokens": 32768
+		},
+		{
+			"id": "gpt-oss-120b",
+			"name": "GENAI / gpt-oss-120b",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": false,
+			"thinking": true,
+			"supportsReasoningEffort": ["low", "medium", "high"],
+			"reasoningEffortFormat": "chat-completions",
+			"maxInputTokens": 98304,
+			"maxOutputTokens": 32768
+		},
+		{
+			"id": "GLM-OCR",
+			"name": "GENAI / GLM-OCR",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": false,
+			"vision": true,
+			"thinking": false,
+			"maxInputTokens": 98304,
+			"maxOutputTokens": 32768
+		},
+		{
+			"id": "Qwen3.8-27B",
+			"name": "GENAI / Qwen3.8-27B",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": true,
+			"thinking": true,
+			"supportsReasoningEffort": ["none", "low", "medium", "xhigh"],
+			"reasoningEffortFormat": "chat-completions",
+			"maxInputTokens": 196608,
+			"maxOutputTokens": 65536
+		},
+		{
+			"id": "Qwen3.5-397B-A17B",
+			"name": "GENAI / Qwen3.5-397B-A17B",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": true,
+			"thinking": false,
+			"maxInputTokens": 196608,
+			"maxOutputTokens": 65536
+		},
+		{
+			"id": "DeepSeek-V4.1-Flash",
+			"name": "GENAI / DeepSeek-V4.1-Flash",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": true,
+			"thinking": true,
+			"supportsReasoningEffort": ["none", "low", "high", "xhigh", "max"],
+			"reasoningEffortFormat": "chat-completions",
+			"maxInputTokens": 917504,
+			"maxOutputTokens": 131072
+		},
+		{
+			"id": "GLM-5.3-Flash",
+			"name": "GENAI / GLM-5.3-Flash",
+			"requestHeaders": { "Authorization": "Bearer local-browser-session" },
+			"url": "http://127.0.0.1:58379/v1/chat/completions",
+			"toolCalling": true,
+			"vision": true,
+			"thinking": true,
+			"supportsReasoningEffort": ["none", "medium", "xhigh", "max"],
+			"reasoningEffortFormat": "chat-completions",
+			"maxInputTokens": 917504,
+			"maxOutputTokens": 131072
+		}
+	],
+	"settings": {
+		"gpt-oss-120b": { "reasoningEffort": "high" },
+		"Qwen3.8-27B": { "reasoningEffort": "xhigh" },
+		"DeepSeek-V4.1-Flash": { "reasoningEffort": "max" },
+		"GLM-5.3-Flash": { "reasoningEffort": "max" }
+	}
+}

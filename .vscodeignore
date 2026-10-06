@@ -5,6 +5,10 @@
 !browser-auth.js
 !dashboard.js
 !stats.js
+!bridge-stream.js
+!copilot-config.js
+!copilot-models.js
+!genai-models.json
 !README.md
 !GENAI-README.md
 !LICENSE

@@ -1,7 +1,7 @@
 import globals from "globals";
 
 export default [{
-    files: ["extension.js", "auth.js", "browser-auth.js", "dashboard.js", "stats.js", "test/extension.test.js", "test/stats.test.js"],
+    files: ["extension.js", "auth.js", "browser-auth.js", "dashboard.js", "stats.js", "bridge-stream.js", "test/extension.test.js", "test/stats.test.js", "test/bridge-stream.test.cjs"],
     languageOptions: {
         globals: {
             ...globals.commonjs,

@@ -2,15 +2,160 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { setImmediate: nextTurn } = require('node:timers/promises');
+
+test('startup registration and initial snapshot do not require a message round trip', () => {
+    const manifest = require('../package.json');
+    assert.ok(manifest.activationEvents.includes('onStartupFinished'));
+    const snapshot = { status: '</script><script>bad()</script>', port: 58379, models: [] };
+    const html = require('../dashboard').dashboardHtml(snapshot);
+    assert.ok(!html.includes(snapshot.status));
+    const serialized = html.match(/const initialState = (.*);/)[1];
+    assert.deepEqual(JSON.parse(serialized), snapshot);
+    assert.ok(html.includes('if (initialState) render(initialState)'));
+});
+
+test('port action validates, cancels, resets and saves only user settings', async () => {
+    const source = fs.readFileSync(require.resolve('../extension.js'), 'utf8');
+    const start = source.indexOf('const port = async () =>');
+    const end = source.indexOf('const actions =', start);
+    for (const value of [undefined, '', '58480']) {
+        const updates = [];
+        const notices = [];
+        const vscode = {
+            ConfigurationTarget: { Global: 1 },
+            workspace: { getConfiguration: () => ({ get: () => 58379, update: async (...args) => updates.push(args) }) },
+            window: {
+                showInputBox: async options => {
+                    for (const valid of ['', '1024', '65535', ' 58480 ']) assert.equal(options.validateInput(valid), undefined);
+                    for (const invalid of ['1023', '65536', '12.3', '-1', 'abc']) assert.ok(options.validateInput(invalid));
+                    return value;
+                },
+                showInformationMessage: async message => notices.push(message),
+                showErrorMessage: message => assert.fail(message)
+            }
+        };
+        await vm.runInNewContext(source.slice(start, end) + 'port()', { vscode, stats: { port: 58379 } });
+        assert.equal(updates.length, value === undefined ? 0 : 1);
+        if (updates.length) {
+            assert.equal(updates[0][0], 'port');
+            assert.equal(updates[0][1], value === '' ? undefined : 58480);
+            assert.equal(updates[0][2], 1);
+            assert.ok(notices[0].includes('当前连接不变'));
+        }
+    }
+    assert.ok(require('../dashboard').dashboardHtml().includes('data-command="port"'));
+});
+
+test('observer synchronizes owner state without opening a server or changing credentials', async () => {
+    const source = fs.readFileSync(require.resolve('../extension.js'), 'utf8');
+    const commands = new Map();
+    const messages = [];
+    const subscriptions = [];
+    let provider, poll, unavailable = false, notices = 0, timerCleared = false;
+    let fetches = 0, visibilityChanged, viewDisposed, pending = false, pendingSignal;
+    const snapshot = { status: 'Connected :58480', port: 58480, connectedAt: 100,
+        requests: 12, tokensIn: 34, tokensOut: 56, usageReports: 2, usageMissing: 0,
+        models: [{ name: 'test-model', requests: 12 }], keepalive: { state: 'healthy', lastCheckAt: 200 } };
+    const disposable = { dispose() {} };
+    const fakeVscode = {
+        workspace: { getConfiguration: () => ({ get: (key, fallback) => key === 'port' ? 58480 : fallback }) },
+        window: {
+            createOutputChannel: () => ({ ...disposable, appendLine() {}, show() {} }),
+            registerWebviewViewProvider: (name, value, options) => {
+                assert.equal(options.webviewOptions.retainContextWhenHidden, true);
+                provider = value; return disposable;
+            },
+            showInformationMessage: async () => { notices++; },
+            showErrorMessage: () => assert.fail('unexpected error'),
+            showInputBox: () => assert.fail('observer must not request credentials')
+        },
+        commands: { registerCommand: (name, action) => { commands.set(name, action); return disposable; } }
+    };
+    const sandbox = {
+        module: { exports: {} }, AbortController, AbortSignal,
+        setTimeout, clearTimeout,
+        setInterval: callback => { poll = callback; return { unref() {} }; },
+        clearInterval: () => { timerCleared = true; poll = undefined; },
+        fetch: async (url, options) => {
+            fetches++;
+            if (pending) {
+                pendingSignal = options.signal;
+                return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+            }
+            assert.equal(url, 'http://127.0.0.1:58480/internal/status');
+            assert.equal(options.headers.Authorization, 'Bearer local-browser-session');
+            if (unavailable) throw new Error('connection refused');
+            return { ok: true, json: async () => ({ service: 'genai-login', version: 1, state: snapshot }) };
+        },
+        require: name => {
+            assert.ok(!['undici', './auth', './browser-auth'].includes(name), `Observer loaded heavy dependency: ${name}`);
+            if (name === 'vscode') return fakeVscode;
+            if (name === 'node:http') return { createServer: () => assert.fail('observer must not start server') };
+            return require(name.startsWith('./') ? '../' + name.slice(2) : name);
+        }
+    };
+    vm.runInNewContext(source, sandbox);
+    sandbox.module.exports.activate({ subscriptions, secrets: {
+        get: () => assert.fail('observer must not read credentials'),
+        store: () => assert.fail('observer must not write credentials'),
+        delete: () => assert.fail('observer must not delete credentials')
+    } });
+    try {
+        await nextTurn();
+        assert.equal(fetches, 0);
+        assert.equal(poll, undefined);
+        const view = { visible: false, webview: { postMessage: message => messages.push(message.data),
+            onDidReceiveMessage: () => disposable },
+            onDidChangeVisibility: callback => { visibilityChanged = callback; return disposable; },
+            onDidDispose: callback => { viewDisposed = callback; return disposable; } };
+        provider.resolveWebviewView(view);
+        assert.equal(fetches, 0);
+        view.visible = true; visibilityChanged();
+        await nextTurn();
+        assert.match(messages.at(-1).status, /shared window/);
+        assert.equal(messages.at(-1).tokensOut, 56);
+        assert.equal(messages.at(-1).models[0].name, 'test-model');
+        for (const action of ['connect', 'disconnect', 'credentials', 'clear']) await commands.get(`genai-login.${action}`)();
+        assert.equal(notices, 3);
+        snapshot.requests = 23;
+        poll(); await nextTurn();
+        assert.equal(messages.at(-1).requests, 23);
+        pending = true;
+        poll();
+        view.visible = false; visibilityChanged();
+        assert.equal(pendingSignal.aborted, true);
+        assert.equal(poll, undefined);
+        const hiddenFetches = fetches;
+        await nextTurn();
+        assert.equal(fetches, hiddenFetches);
+        pending = false;
+        snapshot.requests = 42;
+        view.visible = true; visibilityChanged();
+        await nextTurn();
+        assert.equal(messages.at(-1).requests, 42);
+        unavailable = true;
+        poll(); await nextTurn();
+        assert.equal(messages.at(-1).status, 'Disconnected');
+        assert.equal(messages.at(-1).requests, 0);
+        viewDisposed();
+        assert.equal(poll, undefined);
+    } finally {
+        for (const subscription of subscriptions) subscription.dispose();
+    }
+    assert.equal(timerCleared, true);
+});
 
 test('local access permits none metadata but requires host and bearer without Origin', () => {
     const source = fs.readFileSync(require.resolve('../extension.js'), 'utf8');
     const start = source.indexOf('const fetchSite =');
     const end = source.indexOf('if (rejected)', start);
     assert.ok(start >= 0 && end > start);
-    const check = headers => vm.runInNewContext(source.slice(start, end) + 'rejected', { request: { headers } });
+    const check = (headers, port = 58379) => vm.runInNewContext(source.slice(start, end) + 'rejected', { request: { headers }, stats: { port } });
     const base = { host: '127.0.0.1:58379', authorization: 'Bearer local-browser-session' };
     assert.equal(check(base), '');
+    assert.equal(check({ ...base, host: '127.0.0.1:58480' }, 58480), '');
+    assert.notEqual(check(base, 58480), '');
     assert.equal(check({ ...base, 'sec-fetch-site': 'none' }), '');
     for (const site of ['cross-site', 'same-site', 'same-origin', 'invalid']) {
         assert.notEqual(check({ ...base, 'sec-fetch-site': site }), '');

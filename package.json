@@ -3,7 +3,7 @@
   "displayName": "GENAI Login",
   "description": "Manual GENAI login and local bridge",
   "readme": "GENAI-README.md",
-  "version": "0.0.8",
+  "version": "0.0.10",
   "publisher": "local-genai",
   "license": "MIT",
   "repository": {
@@ -20,13 +20,35 @@
     "Other"
   ],
   "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
   "contributes": {
+    "configuration": {
+      "title": "GENAI Login",
+      "properties": {
+        "genai-login.port": {
+          "type": "integer",
+          "default": 58379,
+          "minimum": 1024,
+          "maximum": 65535,
+          "scope": "application",
+          "description": "Local bridge port. Reload participating windows after changing it and update your client's endpoint."
+        },
+        "genai-login.idleTimeoutSeconds": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 86400,
+          "scope": "application",
+          "description": "Upstream idle timeout in seconds; 0 disables it. Applies to new requests."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
           "id": "genai-login",
           "title": "GENAI",
-          "icon": "media/genai.svg"
+          "icon": "media/genai-activity.svg"
         }
       ]
     },
@@ -40,6 +62,14 @@
       ]
     },
     "commands": [
+      {
+        "command": "genai-login.port",
+        "title": "GENAI: Set bridge port"
+      },
+      {
+        "command": "genai-login.models",
+        "title": "GENAI: Manage Copilot models"
+      },
       {
         "command": "genai-login.connect",
         "title": "GENAI: Login and connect"
@@ -59,9 +89,9 @@
     ]
   },
   "scripts": {
-    "lint": "eslint extension.js auth.js browser-auth.js dashboard.js stats.js test/extension.test.js test/stats.test.js",
+    "lint": "eslint extension.js auth.js browser-auth.js dashboard.js stats.js bridge-stream.js test/extension.test.js test/stats.test.js test/bridge-stream.test.cjs",
     "pretest": "npm run lint",
-    "test": "vscode-test"
+    "test": "node --test test/*.test.cjs && vscode-test"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -79,7 +109,9 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "jsonc-parser": "^3.3.1",
     "playwright-core": "^1.63.0",
-    "tough-cookie": "^6.0.2"
+    "tough-cookie": "^6.0.2",
+    "undici": "^7.30.0"
   }
 }

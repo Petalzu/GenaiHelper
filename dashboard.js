@@ -1,7 +1,8 @@
 const crypto = require('node:crypto');
 
-function dashboardHtml() {
+function dashboardHtml(initialState = null) {
     const nonce = crypto.randomBytes(16).toString('base64');
+    const initialJson = JSON.stringify(initialState).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
     return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -90,30 +91,32 @@ function dashboardHtml() {
             background: rgba(255, 255, 255, 0.045);
             cursor: default;
             outline: none;
-            transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+            transition: border-color 120ms ease, background 120ms ease;
         }
-        .metric:hover, .metric:focus-visible { z-index: 4; border-color: rgba(107, 169, 255, 0.6); background: rgba(107, 169, 255, 0.09); transform: translateY(-1px); }
+        .metric:hover, .metric:focus-visible { z-index: 10; border-color: rgba(107, 169, 255, 0.6); background: rgba(107, 169, 255, 0.09); }
         .metric-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 0.7px; }
         .metric-value { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 19px; font-weight: 750; }
         .metric-detail { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
         .hover-card {
+            display: none;
             position: absolute;
             top: calc(100% + 6px);
             left: 0;
             right: 0;
-            z-index: 5;
+            z-index: 1;
             padding: 9px 10px;
             border: 1px solid rgba(107, 169, 255, 0.45);
             border-radius: 8px;
             color: var(--text);
-            background: var(--panel-strong);
+            background: #202020;
+            background: linear-gradient(var(--vscode-editor-background, #202020), var(--vscode-editor-background, #202020)), #202020;
             box-shadow: 0 8px 22px rgba(0, 0, 0, 0.25);
-            opacity: 0;
+            opacity: 1;
             pointer-events: none;
-            transform: translateY(-3px);
+            overflow-wrap: anywhere;
             transition: opacity 120ms ease, transform 120ms ease;
         }
-        .metric:hover .hover-card, .metric:focus-visible .hover-card { opacity: 1; transform: translateY(0); }
+        .metric:hover .hover-card, .metric:focus-visible .hover-card { display: block; }
         .model-list { display: flex; flex-direction: column; gap: 5px; }
         .model-row {
             display: flex;
@@ -186,7 +189,7 @@ function dashboardHtml() {
                 <span class="metric-label">PORT / 端口</span>
                 <strong id="port-value" class="metric-value">--</strong>
                 <small id="port-detail" class="metric-detail">等待连接</small>
-                <span class="hover-card">本地监听地址：127.0.0.1:58379</span>
+                <span id="port-address" class="hover-card">本地监听地址：等待状态</span>
             </div>
             <div class="metric" tabindex="0">
                 <span class="metric-label">UPTIME / 时长</span>
@@ -210,6 +213,12 @@ function dashboardHtml() {
         <div class="section-label"><span>使用的模型</span><span id="model-count">0</span></div>
         <section id="model-list" class="model-list"><div class="empty-models">还没有聊天请求</div></section>
         <section class="action-grid" aria-label="连接操作">
+            <button class="action-tile" data-command="port" title="设置本地反代端口" aria-label="设置本地反代端口">
+                <span class="action-icon" aria-hidden="true">⚙</span><span class="action-copy"><strong>设置端口</strong><small>本地监听端口</small></span>
+            </button>
+            <button class="action-tile" data-command="models" title="添加或删除 Copilot 模型">
+                <span class="action-icon">±</span><span class="action-copy"><strong>Copilot 模型</strong><small>添加 / 删除</small></span>
+            </button>
             <button class="action-tile primary" data-command="connect">
                 <span class="action-icon">+</span><span class="action-copy"><strong>连接 GENAI</strong><small>登录并启动桥接</small></span>
             </button>
@@ -230,7 +239,8 @@ function dashboardHtml() {
         let snapshot;
         const byId = id => document.getElementById(id);
         const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
-        const formatNumber = value => new Intl.NumberFormat('zh-CN').format(number(value));
+        const numberFormatter = new Intl.NumberFormat('zh-CN');
+        const formatNumber = value => numberFormatter.format(number(value));
         const formatTokens = value => value === null || value === undefined ? '--' : formatNumber(value);
         const formatDuration = milliseconds => {
             const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -275,6 +285,7 @@ function dashboardHtml() {
             byId('port-badge').textContent = isConnected ? ':' + data.port : '未监听';
             byId('port-value').textContent = isConnected ? String(data.port) : '--';
             byId('port-detail').textContent = isConnected ? '127.0.0.1' : '等待连接';
+            byId('port-address').textContent = '本地监听地址：127.0.0.1:' + data.port;
             byId('request-value').textContent = formatNumber(data.requests);
             byId('request-detail').textContent = data.requests ? '已转发聊天请求' : '暂无聊天请求';
             const hasUsage = number(data.usageReports) > 0;
@@ -289,11 +300,14 @@ function dashboardHtml() {
         }
         document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => vscode.postMessage({ command: button.dataset.command })));
         window.addEventListener('message', event => { if (event.data && event.data.type === 'state') render(event.data.data); });
+        const initialState = ${initialJson};
+        if (initialState) render(initialState);
         setInterval(() => {
             if (!snapshot || !connected(snapshot)) return;
             byId('uptime-value').textContent = formatDuration(Date.now() - snapshot.connectedAt);
         }, 1000);
         vscode.postMessage({ command: 'ready' });
+        requestAnimationFrame(() => requestAnimationFrame(() => vscode.postMessage({ command: 'painted' })));
     </script>
 </body>
 </html>`;

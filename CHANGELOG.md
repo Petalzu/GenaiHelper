@@ -1,5 +1,15 @@
 # Change Log
 
+## [0.0.10]
+
+- Added multi-select Copilot model management with fixed presets, deduplication, precise deletion and backups.
+- Added configurable port and idle timeout (disabled by default), plus a port settings tile.
+- Hardened streaming cancellation and long-response forwarding without automatic partial replay.
+- Added visible-only cross-window synchronization and retained dashboard context.
+- Updated activity icon and opaque, layout-stable detail overlays.
+- Deferred heavy connection dependencies and added dashboard startup timing diagnostics.
+- Published a ready-to-install VSIX through GitHub Releases.
+
 All notable changes to the "genai-login" extension will be documented in this file.
 
 ## [Unreleased]

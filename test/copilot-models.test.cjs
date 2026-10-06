@@ -1,0 +1,112 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { readConfig, isConfigured, preset, appendModels } = require('../copilot-models');
+const endpoint = 'http://127.0.0.1:58379/v1/chat/completions';
+test('single deletion preserves untouched model text, custom parameters and comments', () => {
+	const { removableModels, removeModels } = require('../copilot-models');
+	const catalog = require('../genai-models.json');
+	for (const spacing of [undefined, 2, '\t']) {
+		const provider = structuredClone(catalog);
+		provider.models.forEach(model => { model.custom = { temperature: 0.72, nested: ['keep', 123] }; });
+		const text = JSON.stringify([provider], null, spacing).replace('"models":', '/* preserve provider comment */ "models":');
+		for (const entry of removableModels(readConfig(text), endpoint)) {
+			const result = removeModels(text, [entry], endpoint);
+			const expected = structuredClone(provider);
+			expected.models.splice(entry.modelIndex, 1);
+			delete expected.settings[entry.id];
+			assert.deepEqual(readConfig(result), [expected]);
+			assert.ok(result.includes('/* preserve provider comment */'));
+			const { parseTree, findNodeAtLocation } = require('jsonc-parser');
+			provider.models.forEach((model, index) => {
+				if (index === entry.modelIndex) return;
+				const node = findNodeAtLocation(parseTree(text), [0, 'models', index]);
+				assert.ok(result.includes(text.slice(node.offset, node.offset + node.length)));
+			});
+		}
+	}
+});
+test('configuration cancelled at confirmation never writes or backs up files', async () => {
+	const fs = require('node:fs');
+	const vm = require('node:vm');
+	const uri = { path: '/User/chatLanguageModels.json', toString: () => 'file:///User/chatLanguageModels.json' };
+	let step = 0;
+	const api = {
+		commands: { executeCommand: async command => assert.equal(command, 'workbench.action.openLanguageModelsJson') },
+		window: {
+			activeTextEditor: { document: { uri } },
+			showQuickPick: async items => ++step === 1 ? '添加模型' : [items[0]],
+			showWarningMessage: async () => undefined,
+			showErrorMessage: message => assert.fail(message)
+		},
+		workspace: {
+			openTextDocument: async () => ({ isDirty: false, version: 1, getText: () => '[]' }),
+			fs: { readFile: () => assert.fail('unexpected read'), copy: () => assert.fail('unexpected backup') },
+			applyEdit: () => assert.fail('unexpected write')
+		}
+	};
+	const sandbox = { module: { exports: {} }, require: name => name === 'vscode' ? api : require('../' + name.slice(2)) };
+	vm.runInNewContext(fs.readFileSync(require.resolve('../copilot-config'), 'utf8'), sandbox);
+	await sandbox.module.exports.configureModels(58379);
+	assert.equal(step, 2);
+});
+test('removal preserves other endpoints, shared settings and unrelated providers', () => {
+	const { removableModels, removeModels } = require('../copilot-models');
+	const id = 'DeepSeek-V4.1-Flash';
+	const text = JSON.stringify([{ models: [preset(id, endpoint), preset(id, 'https://example.com/v1/chat/completions'), preset('GLM-5.3-Flash', endpoint)], settings: { [id]: { reasoningEffort: 'low' }, 'GLM-5.3-Flash': { reasoningEffort: 'max' }, other: {} } }, { name: 'unrelated' }]);
+	const entries = removableModels(readConfig(text), endpoint);
+	assert.equal(entries.length, 2);
+	const result = readConfig(removeModels(text, entries, endpoint));
+	assert.equal(result[0].models.length, 1);
+	assert.equal(result[0].settings[id].reasoningEffort, 'low');
+	assert.equal(result[0].settings['GLM-5.3-Flash'], undefined);
+	assert.deepEqual(result[1], { name: 'unrelated' });
+	assert.equal(removeModels(text, [], endpoint), text);
+});
+
+test('append preserves comments, other providers and settings and is idempotent', () => {
+	const original = '[\n// Keep this comment\n{"name":"Other","models":[],"apiKey":"untouched"}\n]';
+	const models = [preset('DeepSeek-V4.1-Flash', endpoint), preset('GLM-5.3-Flash', endpoint)];
+	const updated = appendModels(original, models, endpoint);
+	assert.ok(updated.includes('// Keep this comment'));
+	assert.deepEqual(readConfig(updated)[0], readConfig(original)[0]);
+	assert.equal(readConfig(updated)[1].settings['GLM-5.3-Flash'].reasoningEffort, 'max');
+	assert.equal(appendModels(updated, models, endpoint), updated);
+	const firstOnly = appendModels(original, [models[0]], endpoint);
+	const expanded = appendModels(firstOnly, [models[1]], endpoint);
+	assert.equal(readConfig(expanded).length, 2);
+	assert.equal(readConfig(expanded)[1].models.length, 2);
+	assert.equal(readConfig(expanded)[1].settings['GLM-5.3-Flash'].reasoningEffort, 'max');
+});
+
+test('deduplication requires both local endpoint and model identity', () => {
+	const config = [{ models: [{ name: 'GENAI / sample', url: endpoint.replace('127.0.0.1', 'localhost') + '/' }] }];
+	assert.ok(isConfigured(config, 'sample', endpoint));
+	assert.equal(isConfigured(config, 'other', endpoint), false);
+	assert.equal(isConfigured(config, 'sample', endpoint.replace('58379', '58480')), false);
+	assert.throws(() => readConfig('{broken'));
+	assert.throws(() => preset('unknown', endpoint), /catalog/);
+});
+
+test('presets preserve reviewed parameters and isolate port overrides', () => {
+	const catalog = require('../genai-models.json');
+	for (const model of catalog.models) {
+		const configured = preset(model.id, endpoint.replace('58379', '58480'));
+		assert.deepEqual(configured, { ...model, url: endpoint.replace('58379', '58480') });
+		configured.requestHeaders.Authorization = 'changed';
+		assert.equal(model.requestHeaders.Authorization, 'Bearer local-browser-session');
+		if (model.thinking) assert.ok(model.supportsReasoningEffort.includes(catalog.settings[model.id].reasoningEffort));
+		else assert.equal(catalog.settings[model.id], undefined);
+	}
+});
+
+test('all seven models append once with valid context budgets', () => {
+	const catalog = require('../genai-models.json');
+	const limits = { 'gemma-4-31B-it': 180000, 'gpt-oss-120b': 131072, 'GLM-OCR': 131072,
+		'Qwen3.8-27B': 262144, 'Qwen3.5-397B-A17B': 262144, 'DeepSeek-V4.1-Flash': 1048576, 'GLM-5.3-Flash': 1048576 };
+	assert.deepEqual(catalog.models.map(model => model.id).sort(), Object.keys(limits).sort());
+	for (const model of catalog.models) assert.ok(model.maxInputTokens + model.maxOutputTokens <= limits[model.id]);
+	const models = catalog.models.map(model => preset(model.id, endpoint));
+	const result = appendModels('[]', models, endpoint);
+	assert.equal(readConfig(result)[0].models.length, 7);
+	assert.equal(appendModels(result, models, endpoint), result);
+});

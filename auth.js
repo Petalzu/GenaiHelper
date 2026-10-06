@@ -15,7 +15,7 @@ class Session {
             this.trace(`HTTP ${method} ${current.hostname}`);
             let response;
             try {
-                response = await fetch(current, { method, body, headers, redirect: 'manual', signal: options.signal || AbortSignal.timeout(120000) });
+                response = await (options.fetch || fetch)(current, { method, body, headers, redirect: 'manual', signal: options.signal || AbortSignal.timeout(120000), ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}) });
             } catch (error) {
                 const code = error.cause?.code || error.name;
                 this.trace(`Transport failure: ${/^[A-Za-z0-9_]+$/.test(code) ? code : 'UNKNOWN'}`);
