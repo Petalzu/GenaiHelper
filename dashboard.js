@@ -97,6 +97,7 @@ function dashboardHtml(initialState = null) {
         .metric-label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: 0.7px; }
         .metric-value { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 19px; font-weight: 750; }
         .metric-detail { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+        #token-detail { white-space: pre-line; overflow-wrap: anywhere; overflow: visible; }
         .hover-card {
             display: none;
             position: absolute;
@@ -207,7 +208,7 @@ function dashboardHtml(initialState = null) {
                 <span class="metric-label">TOKENS / 消耗</span>
                 <strong id="token-value" class="metric-value">--</strong>
                 <small id="token-detail" class="metric-detail">等待上游 usage</small>
-                <span class="hover-card">仅显示上游响应提供的 prompt_tokens 与 completion_tokens。</span>
+                <span id="token-coverage" class="hover-card">请求结束后累计上游 usage，不估算缺失值。</span>
             </div>
         </section>
         <div class="section-label"><span>使用的模型</span><span id="model-count">0</span></div>
@@ -290,7 +291,10 @@ function dashboardHtml(initialState = null) {
             byId('request-detail').textContent = data.requests ? '已转发聊天请求' : '暂无聊天请求';
             const hasUsage = number(data.usageReports) > 0;
             byId('token-value').textContent = hasUsage ? formatTokens(number(data.tokensIn) + number(data.tokensOut)) : '--';
-            byId('token-detail').textContent = hasUsage ? formatTokens(data.tokensIn) + ' in · ' + formatTokens(data.tokensOut) + ' out' : data.usageMissing ? '上游未返回 usage' : '等待上游 usage';
+            const inputKnown = number(data.inputUsageReports ?? data.usageReports) > 0;
+            const outputKnown = number(data.outputUsageReports ?? data.usageReports) > 0;
+            byId('token-detail').textContent = 'IN 输入：' + (inputKnown ? formatTokens(data.tokensIn) : '--') + '\\nOUT 输出：' + (outputKnown ? formatTokens(data.tokensOut) : '--');
+            byId('token-coverage').textContent = '请求结束后累计上游报告值；输入有报告 ' + number(data.inputUsageReports ?? data.usageReports) + ' 次，输出有报告 ' + number(data.outputUsageReports ?? data.usageReports) + ' 次，完全缺失 ' + number(data.usageMissing) + ' 次。缺失不代表零；总数可能不完整。';
             const keepalive = data.keepalive || {};
             byId('keepalive-text').textContent = keepalive.state === 'healthy' ? '每 60s 检查 Cookie' : keepalive.state === 'checking' ? '正在检查 Cookie' : keepalive.state === 'reauthenticating' ? 'Cookie 过期，正在重认证' : isConnected ? '等待首次保活检查' : '等待连接';
             byId('last-check').textContent = keepalive.lastCheckAt ? '上次保活 ' + formatClock(keepalive.lastCheckAt) : '保活：尚未检查';

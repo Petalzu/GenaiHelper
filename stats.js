@@ -1,3 +1,4 @@
+const { StringDecoder } = require('node:string_decoder');
 const MAX_TRACKED_MODELS = 64;
 const MAX_SSE_LINE_LENGTH = 64 * 1024;
 const MAX_JSON_STATS_BODY = 2 * 1024 * 1024;
@@ -11,14 +12,16 @@ function createStats(port) {
 		tokensOut: 0,
 		usageReports: 0,
 		usageMissing: 0,
+		inputUsageReports: 0,
+		outputUsageReports: 0,
 		models: new Map(),
 		otherModels: 0
 	};
 }
 
 function recordRequest(stats, body) {
-	stats.requests++;
 	if (body === undefined) return undefined;
+	stats.requests++;
 	let model = 'unknown';
 	if (body.length <= MAX_JSON_STATS_BODY) {
 		try {
@@ -30,17 +33,17 @@ function recordRequest(stats, body) {
 	if (current !== undefined) stats.models.set(model, current + 1);
 	else if (stats.models.size < MAX_TRACKED_MODELS) stats.models.set(model, 1);
 	else stats.otherModels++;
-	return { hasUsage: false, tokensIn: 0, tokensOut: 0, committed: false };
+	return { hasUsage: false, hasInput: false, hasOutput: false, tokensIn: 0, tokensOut: 0, committed: false };
 }
 
 function applyUsage(requestStats, usage) {
-	if (!usage || requestStats.hasUsage) return;
+	if (!usage || !requestStats || requestStats.committed) return;
 	const tokensIn = Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 ? usage.prompt_tokens : null;
 	const tokensOut = Number.isSafeInteger(usage.completion_tokens) && usage.completion_tokens >= 0 ? usage.completion_tokens : null;
 	if (tokensIn === null && tokensOut === null) return;
 	requestStats.hasUsage = true;
-	requestStats.tokensIn = tokensIn ?? 0;
-	requestStats.tokensOut = tokensOut ?? 0;
+	if (tokensIn !== null) { requestStats.tokensIn = tokensIn; requestStats.hasInput = true; }
+	if (tokensOut !== null) { requestStats.tokensOut = tokensOut; requestStats.hasOutput = true; }
 }
 
 function commitRequest(stats, requestStats) {
@@ -50,6 +53,8 @@ function commitRequest(stats, requestStats) {
 		stats.usageReports++;
 		stats.tokensIn += requestStats.tokensIn;
 		stats.tokensOut += requestStats.tokensOut;
+		if (requestStats.hasInput) stats.inputUsageReports++;
+		if (requestStats.hasOutput) stats.outputUsageReports++;
 	} else stats.usageMissing++;
 	return true;
 }
@@ -59,13 +64,26 @@ function createUsageParser(contentType, requestStats) {
 	let lineBuffer = '';
 	let jsonBuffer = '';
 	let finished = false;
+	const decoder = new StringDecoder('utf8');
+	let droppingLine = false;
+	let eventData = '';
+	let droppingEvent = false;
+	const flushEvent = () => {
+		if (!droppingEvent && eventData.trim() !== '[DONE]') {
+			try { applyUsage(requestStats, JSON.parse(eventData).usage); } catch {}
+		}
+		eventData = '';
+		droppingEvent = false;
+	};
 
 	const processLine = line => {
 		const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
+		if (!normalized) { flushEvent(); return; }
 		if (!normalized.startsWith('data:') || normalized.length > MAX_SSE_LINE_LENGTH) return;
-		const data = normalized.slice(5).trim();
-		if (!data || data === '[DONE]' || data.length > MAX_SSE_LINE_LENGTH) return;
-		try { applyUsage(requestStats, JSON.parse(data).usage); } catch {}
+		const data = normalized.slice(5).replace(/^ /, '');
+		if (droppingEvent) return;
+		if (eventData.length + data.length + 1 > MAX_SSE_LINE_LENGTH) { droppingEvent = true; eventData = ''; return; }
+		eventData += (eventData ? '\n' : '') + data;
 	};
 
 	const consumeEventStream = text => {
@@ -74,11 +92,16 @@ function createUsageParser(contentType, requestStats) {
 			const newline = text.indexOf('\n', offset);
 			if (newline < 0) {
 				const remaining = text.slice(offset);
-				lineBuffer = lineBuffer.length + remaining.length <= MAX_SSE_LINE_LENGTH ? lineBuffer + remaining : '';
+				if (!droppingLine) {
+					if (lineBuffer.length + remaining.length <= MAX_SSE_LINE_LENGTH) lineBuffer += remaining;
+					else { lineBuffer = ''; droppingLine = true; droppingEvent = true; }
+				}
 				return;
 			}
 			const segment = text.slice(offset, newline);
-			if (lineBuffer.length + segment.length <= MAX_SSE_LINE_LENGTH) processLine(lineBuffer + segment);
+			if (!droppingLine && lineBuffer.length + segment.length <= MAX_SSE_LINE_LENGTH) processLine(lineBuffer + segment);
+			else droppingEvent = true;
+			droppingLine = false;
 			lineBuffer = '';
 			offset = newline + 1;
 		}
@@ -87,7 +110,7 @@ function createUsageParser(contentType, requestStats) {
 	return {
 		consume(chunk) {
 			if (finished || !requestStats) return;
-			const text = chunk.toString('utf8');
+			const text = decoder.write(chunk);
 			if (isEventStream) {
 				consumeEventStream(text);
 				return;
@@ -100,11 +123,14 @@ function createUsageParser(contentType, requestStats) {
 			if (finished || !requestStats) return;
 			finished = true;
 			if (isEventStream) {
-				if (lineBuffer) processLine(lineBuffer);
+				consumeEventStream(decoder.end());
+				if (lineBuffer && !droppingLine) processLine(lineBuffer);
+				flushEvent();
 				lineBuffer = '';
 				return;
 			}
 			if (jsonBuffer !== null) {
+				jsonBuffer += decoder.end();
 				try { applyUsage(requestStats, JSON.parse(jsonBuffer).usage); } catch {}
 			}
 			jsonBuffer = '';

@@ -88,6 +88,8 @@ function activate(context) {
 		tokensOut: stats.tokensOut,
 		usageReports: stats.usageReports,
 		usageMissing: stats.usageMissing,
+		inputUsageReports: stats.inputUsageReports,
+		outputUsageReports: stats.outputUsageReports,
 		models: [...stats.models].map(([name, requests]) => ({ name, requests })).concat(stats.otherModels ? [{ name: '其他模型', requests: stats.otherModels }] : []),
 		keepalive: { ...keepaliveInfo }
 	});
@@ -143,6 +145,7 @@ function activate(context) {
 		keepaliveInfo = { state: 'idle', lastCheckAt: null };
 		server?.closeAllConnections(); server?.close(); server = undefined;
 		stats.connectedAt = null; stats.requests = 0; stats.tokensIn = 0; stats.tokensOut = 0; stats.usageReports = 0; stats.usageMissing = 0; stats.models.clear(); stats.otherModels = 0;
+		stats.inputUsageReports = 0; stats.outputUsageReports = 0;
 		status('Disconnected');
 	};
 	stopActive = stop;
@@ -153,6 +156,8 @@ function activate(context) {
 		if (!username) return false;
 		const password = await vscode.window.showInputBox({ title: 'UMPASS password', password: true, ignoreFocusOut: true });
 		if (!password) return false;
+		if (!await requireOwner()) return false;
+		if (active) throw new Error('Disconnect before changing credentials.');
 		await context.secrets.store('credentials', JSON.stringify({ username, password }));
 		await context.secrets.delete('session');
 		return true;
@@ -167,6 +172,7 @@ function activate(context) {
 		if (!stored) { if (!await credentials()) return; stored = await context.secrets.get('credentials'); }
 		if (active) return;
 		const controller = new AbortController(); active = controller;
+		try {
 		const { Agent, fetch: upstreamFetch } = require('undici');
 		const { Session, ORIGIN } = require('./auth');
 		const { browserLogin: login } = require('./browser-auth');
@@ -283,7 +289,6 @@ function activate(context) {
 			if (!controller.signal.aborted) status('Network error; retry request');
 			if (!response.headersSent) sendError(response, 502, 'Upstream request failed. Retry when network is available.'); else response.destroy();
 		}); });
-		try {
 			status('Connecting');
 			await new Promise((resolve, reject) => { server.once('error', reject); server.listen(stats.port, '127.0.0.1', resolve); });
 			await authenticate();

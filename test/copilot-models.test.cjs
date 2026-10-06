@@ -2,6 +2,44 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readConfig, isConfigured, preset, appendModels } = require('../copilot-models');
 const endpoint = 'http://127.0.0.1:58379/v1/chat/completions';
+test('external change during backup refuses edit even with unchanged editor version', async () => {
+	const fs = require('node:fs');
+	const vm = require('node:vm');
+	let reads = 0, backups = 0, step = 0;
+	const errors = [];
+	const uri = { path: '/User/chatLanguageModels.json', toString: () => 'file:///User/chatLanguageModels.json', with: value => value };
+	const api = {
+		commands: { executeCommand: async () => {} },
+		window: {
+			activeTextEditor: { document: { uri } },
+			showQuickPick: async items => ++step === 1 ? '添加模型' : [items[0]],
+			showWarningMessage: async () => '确认保存',
+			showErrorMessage: async message => errors.push(message)
+		},
+		workspace: {
+			openTextDocument: async () => ({ isDirty: false, version: 1, getText: () => '[]' }),
+			fs: {
+				readFile: async () => Buffer.from(++reads === 1 ? '[]' : '[{"name":"external-change"}]'),
+				copy: async () => { backups++; }
+			},
+			applyEdit: () => assert.fail('must not overwrite concurrent changes')
+		},
+		WorkspaceEdit: function () { assert.fail('must reject before constructing an edit'); }
+	};
+	const sandbox = { Buffer, module: { exports: {} }, require: name => name === 'vscode' ? api : require('../' + name.slice(2)) };
+	vm.runInNewContext(fs.readFileSync(require.resolve('../copilot-config'), 'utf8'), sandbox);
+	await sandbox.module.exports.configureModels(58379);
+	assert.equal(reads, 2);
+	assert.equal(backups, 1);
+	assert.equal(errors.length, 1);
+	assert.match(errors[0], /备份期间发生变化/);
+});
+test('deleting the only model and setting supports JSONC trailing commas', () => {
+	const { removableModels, removeModels } = require('../copilot-models');
+	const text = '[{"models":[' + JSON.stringify(preset('DeepSeek-V4.1-Flash', endpoint)) + ',],"settings":{"DeepSeek-V4.1-Flash":{"reasoningEffort":"max"},},"untouched":42},]';
+	const result = removeModels(text, removableModels(readConfig(text), endpoint), endpoint);
+	assert.deepEqual(readConfig(result), [{ models: [], settings: {}, untouched: 42 }]);
+});
 test('single deletion preserves untouched model text, custom parameters and comments', () => {
 	const { removableModels, removeModels } = require('../copilot-models');
 	const catalog = require('../genai-models.json');

@@ -13,9 +13,8 @@ suite('Extension Test Suite', () => {
 			assert.ok(extension);
 			await extension.activate();
 			const commands = await vscode.commands.getCommands(true);
-			for (const name of ['connect', 'credentials', 'disconnect', 'clear']) assert.ok(commands.includes(`genai-login.${name}`));
+			for (const name of ['connect', 'credentials', 'disconnect', 'clear', 'models', 'port']) assert.ok(commands.includes(`genai-login.${name}`));
 			assert.equal(listens, 0);
-			await vscode.commands.executeCommand('genai-login.disconnect');
 		} finally { http.Server.prototype.listen = original; }
 	});
 	test('Dashboard view is contributed as a Webview', async () => {

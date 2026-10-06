@@ -4,6 +4,49 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { setImmediate: nextTurn } = require('node:timers/promises');
 
+test('credentials are not written when ownership changes during input', async () => {
+    const source = fs.readFileSync(require.resolve('../extension.js'), 'utf8');
+    const start = source.indexOf('const credentials = async () =>');
+    const end = source.indexOf('const connect =', start);
+    for (const owner of ['local', 'other']) {
+        let checks = 0;
+        const sandbox = {
+            active: undefined,
+            requireOwner: async () => {
+                checks++;
+                if (checks === 2 && owner === 'local') sandbox.active = {};
+                return checks !== 2 || owner !== 'other';
+            },
+            vscode: { window: { showInputBox: async () => 'test' } },
+            context: { secrets: { store: () => assert.fail('must not overwrite credentials'), delete: () => assert.fail('must not clear session') } }
+        };
+        const result = vm.runInNewContext(source.slice(start, end) + 'credentials()', sandbox);
+        if (owner === 'local') await assert.rejects(result, /Disconnect/);
+        else assert.equal(await result, false);
+        assert.equal(checks, 2);
+    }
+});
+
+test('connection initialization failure clears active state and permits retry', async () => {
+    const source = fs.readFileSync(require.resolve('../extension.js'), 'utf8');
+    const start = source.indexOf('const connect = async () =>');
+    const end = source.indexOf('let configuringModels', start);
+    let loads = 0;
+    const sandbox = {
+        AbortController,
+        syncSharedState: async () => {},
+        output: { show() {} }, trace() {},
+        context: { secrets: { get: async () => '{"username":"test","password":"dummy"}' } },
+        require: () => { loads++; throw new Error('dependency failed'); }
+    };
+    vm.runInNewContext('let active, sharedState; const stop = () => { active?.abort(); active = undefined; };' + source.slice(start, end) + 'globalThis.connect = connect; globalThis.isActive = () => Boolean(active);', sandbox);
+    for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(sandbox.connect(), /dependency failed/);
+        assert.equal(sandbox.isActive(), false);
+    }
+    assert.equal(loads, 2);
+});
+
 test('startup registration and initial snapshot do not require a message round trip', () => {
     const manifest = require('../package.json');
     assert.ok(manifest.activationEvents.includes('onStartupFinished'));

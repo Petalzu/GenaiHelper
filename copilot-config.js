@@ -49,7 +49,8 @@ async function configureModels(port) {
 		if (document.version !== version || document.isDirty || disk !== original) throw new Error('文件已发生变化，请重新执行，避免覆盖其他编辑。');
 		const backup = uri.with({ path: `${uri.path}.genai-${Date.now()}.bak` });
 		await vscode.workspace.fs.copy(uri, backup, { overwrite: false });
-		if (document.version !== version || document.isDirty) throw new Error('文件已发生变化，请重新执行。');
+		const latestDisk = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+		if (document.version !== version || document.isDirty || latestDisk !== original) throw new Error('文件在备份期间发生变化，请重新执行，避免覆盖其他编辑。');
 		const edit = new vscode.WorkspaceEdit();
 		edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(original.length)), updated);
 		if (!await vscode.workspace.applyEdit(edit)) throw new Error('无法应用配置编辑。');

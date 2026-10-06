@@ -82,6 +82,9 @@ function removeNode(text, path) {
 		scanner.setPosition(previous.offset + previous.length);
 		if (scanner.scan() !== SyntaxKind.CommaToken) throw new Error('Cannot safely locate model separator.');
 		start = scanner.getTokenOffset();
+	} else {
+		scanner.setPosition(end);
+		if (scanner.scan() === SyntaxKind.CommaToken) end = scanner.getTokenOffset() + scanner.getTokenLength();
 	}
 	return applyEdits(text, [{ offset: start, length: end - start, content: '' }]);
 }
