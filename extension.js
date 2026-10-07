@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const http = require('node:http');
 const { createRequestLifetime, forwardBody, transportCode } = require('./bridge-stream');
 const { dashboardHtml } = require('./dashboard');
-const { createStats, recordRequest, commitRequest, createUsageParser } = require('./stats');
+const { createStats, createHistory, recordRequest, commitRequest, createUsageParser } = require('./stats');
 
 let stopActive;
 
@@ -67,6 +67,7 @@ function activate(context) {
 	const output = vscode.window.createOutputChannel('GENAI Login');
 	context.subscriptions.push(output);
 	const trace = message => output.appendLine(`${new Date().toISOString()} ${message}`);
+	const history = createHistory(context.globalState, () => trace('History persistence failed; totals may not survive reload.'));
 	let server, active, authentication, keepaliveTimer, keepaliveOwner;
 	let state = 'Disconnected';
 	let dashboard;
@@ -81,6 +82,7 @@ function activate(context) {
 	const status = value => { state = value; dashboard?.refresh(); };
 	const localSnapshot = () => ({
 		status: state,
+		history: history.snapshot(),
 		port: stats.port,
 		connectedAt: stats.connectedAt,
 		requests: stats.requests,
@@ -230,6 +232,7 @@ function activate(context) {
 		const startKeepalive = () => { clearTimeout(keepaliveTimer); scheduleKeepalive(); };
 		const sendError = (response, code, message) => { response.writeHead(code, { 'content-type': 'application/json' }); response.end(JSON.stringify({ error: { message } })); };
 		const settleRequest = requestStats => {
+			history.finish(requestStats);
 			if (active !== controller || controller.signal.aborted) return;
 			if (commitRequest(stats, requestStats)) dashboard?.refresh();
 		};
@@ -254,6 +257,11 @@ function activate(context) {
 			let requestStats, usageParser;
 			try {
 			const options = { method: request.method, body: request.method === 'POST' ? Buffer.concat(chunks) : undefined, headers: { 'content-type': 'application/json', Accept: 'application/json' }, signal: lifetime.signal, fetch: upstreamFetch, dispatcher };
+			if (request.method === 'POST') {
+				requestStats = recordRequest(stats, options.body);
+				history.start();
+				dashboard?.refresh();
+			}
 			let result = await session.request(ORIGIN + route, options);
 			if (result.status === 401) {
 				await result.body?.cancel();
@@ -264,7 +272,6 @@ function activate(context) {
 			}
 			lifetime.touch();
 			await persist(); status(`Connected :${stats.port}`);
-			requestStats = request.method === 'POST' && request.url === '/v1/chat/completions' ? recordRequest(stats, Buffer.concat(chunks)) : recordRequest(stats);
 			const contentType = result.headers.get('content-type') || 'application/json';
 			response.writeHead(result.status, { 'content-type': contentType });
 			if (!result.body) { settleRequest(requestStats); return response.end(); }
@@ -272,7 +279,7 @@ function activate(context) {
 			await forwardBody(result.body, response, lifetime, chunk => {
 				bytes += chunk.length;
 				usageParser.consume(chunk);
-			});
+			}, result.status === 200 && contentType.toLowerCase().includes('text/event-stream'));
 			trace(`Proxy completed: status=${result.status} elapsedMs=${Date.now() - startedAt} bytes=${bytes}`);
 			} catch (error) {
 				const reason = lifetime.signal.reason?.name === 'TimeoutError' ? lifetime.signal.reason : error;
@@ -281,6 +288,7 @@ function activate(context) {
 			} finally {
 				lifetime.dispose();
 				usageParser?.finish();
+				if (usageParser) trace(`Proxy formatting: ${JSON.stringify(usageParser.formatting)}`);
 				settleRequest(requestStats);
 			}
 		};

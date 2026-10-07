@@ -1,4 +1,38 @@
 const { StringDecoder } = require('node:string_decoder');
+const { randomUUID } = require('node:crypto');
+
+function createHistory(storage, onError = () => {}) {
+	const prefix = 'usageHistory.v1.';
+	const key = prefix + randomUUID();
+	const own = { requests: 0, tokensIn: 0, tokensOut: 0, inputUsageReports: 0, outputUsageReports: 0 };
+	let pending = Promise.resolve();
+	const save = () => {
+		const snapshot = { ...own };
+		pending = pending.then(() => storage.update(key, snapshot)).catch(onError);
+	};
+	return {
+		start() { own.requests++; save(); },
+		finish(request) {
+			if (!request || request.historyCommitted) return;
+			request.historyCommitted = true;
+			if (request.hasInput) { own.tokensIn += request.tokensIn; own.inputUsageReports++; }
+			if (request.hasOutput) { own.tokensOut += request.tokensOut; own.outputUsageReports++; }
+			save();
+		},
+		snapshot() {
+			const total = { ...own };
+			for (const storedKey of storage.keys()) {
+				if (!storedKey.startsWith(prefix) || storedKey === key) continue;
+				const record = storage.get(storedKey);
+				for (const field of Object.keys(total)) {
+					if (Number.isSafeInteger(record?.[field]) && record[field] >= 0) total[field] += record[field];
+				}
+			}
+			return total;
+		},
+		flush: () => pending
+	};
+}
 const MAX_TRACKED_MODELS = 64;
 const MAX_SSE_LINE_LENGTH = 64 * 1024;
 const MAX_JSON_STATS_BODY = 2 * 1024 * 1024;
@@ -61,6 +95,10 @@ function commitRequest(stats, requestStats) {
 
 function createUsageParser(contentType, requestStats) {
 	const isEventStream = contentType.toLowerCase().includes('text/event-stream');
+	const formatting = { contentChunks: 0, contentNewlines: 0, reasoningAfterContent: 0,
+		mixedReasoningContent: 0, reasoningChunks: 0, toolCallChunks: 0, reasoningIdChunks: 0,
+		parsedEvents: 0, invalidEvents: 0, droppedEvents: 0, eventStream: isEventStream };
+	const contentChoices = new Set();
 	let lineBuffer = '';
 	let jsonBuffer = '';
 	let finished = false;
@@ -69,8 +107,29 @@ function createUsageParser(contentType, requestStats) {
 	let eventData = '';
 	let droppingEvent = false;
 	const flushEvent = () => {
-		if (!droppingEvent && eventData.trim() !== '[DONE]') {
-			try { applyUsage(requestStats, JSON.parse(eventData).usage); } catch {}
+		if (droppingEvent) formatting.droppedEvents++;
+		if (!droppingEvent && eventData.trim() && eventData.trim() !== '[DONE]') {
+			try {
+				const event = JSON.parse(eventData);
+				formatting.parsedEvents++;
+				applyUsage(requestStats, event.usage);
+				for (const choice of Array.isArray(event.choices) ? event.choices : []) {
+					const delta = choice?.delta;
+					if (!delta) continue;
+					const index = choice.index ?? 0;
+					const hasReasoning = [delta.cot_summary, delta.reasoning_text, delta.reasoning_content, delta.reasoning, delta.thinking].some(value => typeof value === 'string' && value.length > 0);
+					if (hasReasoning) formatting.reasoningChunks++;
+					if (contentChoices.has(index) && hasReasoning) formatting.reasoningAfterContent++;
+					if (delta.cot_id || delta.reasoning_opaque || delta.signature) formatting.reasoningIdChunks++;
+					if (Array.isArray(delta.tool_calls) && delta.tool_calls.length) formatting.toolCallChunks++;
+					if (typeof delta.content === 'string' && delta.content.length > 0) {
+						if (hasReasoning) formatting.mixedReasoningContent++;
+						formatting.contentChunks++;
+						formatting.contentNewlines += (delta.content.match(/\n/g) || []).length;
+						if (contentChoices.size < 128) contentChoices.add(index);
+					}
+				}
+			} catch { formatting.invalidEvents++; }
 		}
 		eventData = '';
 		droppingEvent = false;
@@ -108,6 +167,7 @@ function createUsageParser(contentType, requestStats) {
 	};
 
 	return {
+		formatting,
 		consume(chunk) {
 			if (finished || !requestStats) return;
 			const text = decoder.write(chunk);
@@ -139,6 +199,7 @@ function createUsageParser(contentType, requestStats) {
 }
 
 module.exports = {
+	createHistory,
 	MAX_TRACKED_MODELS,
 	MAX_SSE_LINE_LENGTH,
 	MAX_JSON_STATS_BODY,

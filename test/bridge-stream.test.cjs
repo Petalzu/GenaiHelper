@@ -51,7 +51,7 @@ test('HTTP delayed headers, silent body and large slow-consumed output preserve 
 	const lifetime = createRequestLifetime(sink, new AbortController().signal);
 	try {
 		const result = await fetch(`http://127.0.0.1:${server.address().port}`, { dispatcher, signal: lifetime.signal });
-		await forwardBody(result.body, sink, lifetime, () => {});
+		await forwardBody(result.body, sink, lifetime, () => {}, true);
 		assert.equal(actual.digest('hex'), expected.digest('hex'));
 		assert.equal(serverError, undefined);
 	} finally {
@@ -78,7 +78,7 @@ test('cancellation interrupts a silent upstream body and closes its socket', { t
 	const lifetime = createRequestLifetime(sink, parent.signal);
 	try {
 		const result = await fetch(`http://127.0.0.1:${server.address().port}`, { dispatcher, signal: lifetime.signal });
-		const forwarding = forwardBody(result.body, sink, lifetime, () => {});
+		const forwarding = forwardBody(result.body, sink, lifetime, () => {}, true);
 		parent.abort();
 		await assert.rejects(forwarding, { name: 'AbortError' });
 		await closed;
@@ -144,6 +144,154 @@ test('forwarding preserves bytes with a slow consumer', async () => {
 	await forwardBody(body, response, { signal: new AbortController().signal, touch() { touches++; } }, () => {});
 	assert.equal(chunks.join(''), 'data: first\n\ndata: [DONE]\n\n');
 	assert.equal(touches, 2);
+});
+
+test('Markdown split across content deltas and empty reasoning fields stays unchanged', async () => {
+	const { createUsageParser } = require('../stats');
+	const fragments = ['v107 **84485528 >', ' 84485446**', ', +82.\n\n', '```js\nconst value = 1;\n```'];
+	const events = fragments.map(content => 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content, reasoning: '' } }] }) + '\n\n');
+	const original = Buffer.from(events.join('') + 'data: [DONE]\n\n');
+	const chunks = [];
+	const response = new Writable({ write(chunk, encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } });
+	const parser = createUsageParser('text/event-stream', { committed: false });
+	let offset = 0;
+	const body = new ReadableStream({ pull(controller) {
+		if (offset === original.length) controller.close();
+		else controller.enqueue(original.subarray(offset, ++offset));
+	} });
+	await forwardBody(body, response, { signal: new AbortController().signal, touch() {} }, chunk => parser.consume(chunk));
+	parser.finish();
+	assert.deepEqual(Buffer.concat(chunks), original);
+	const content = Buffer.concat(chunks).toString().split('\n\n').filter(event => event.startsWith('data: {'))
+		.map(event => JSON.parse(event.slice(6)).choices[0].delta.content).join('');
+	assert.equal(content, fragments.join(''));
+});
+
+test('formatting diagnostics distinguish actual newlines from reasoning interruptions', () => {
+	const { createUsageParser } = require('../stats');
+	const parser = createUsageParser('text/event-stream', { committed: false });
+	const deltas = [
+		{ index: 0, delta: { reasoning: 'Plan' } },
+		{ index: 0, delta: { content: '\u73b0\u5728**84485528 >', reasoning: '' } },
+		{ index: 1, delta: { reasoning: 'Separate choice' } },
+		{ index: 0, delta: { content: ' 84485446**\n\n' } },
+		{ index: 0, delta: { reasoning_content: 'Interruption' } },
+		{ index: 0, delta: { content: '```js\nconst value = 1;\n```' } }
+	];
+	const bytes = Buffer.from(deltas.map(choice => 'data: ' + JSON.stringify({ choices: [choice] }) + '\r\n\r\n').join('') + 'data: [DONE]\n\n');
+	for (const byte of bytes) parser.consume(Buffer.from([byte]));
+	parser.finish();
+	parser.finish();
+	assert.deepEqual(parser.formatting, { contentChunks: 3, contentNewlines: 4, reasoningAfterContent: 1,
+		mixedReasoningContent: 0, reasoningChunks: 3, toolCallChunks: 0, reasoningIdChunks: 0,
+		parsedEvents: 6, invalidEvents: 0, droppedEvents: 0, eventStream: true });
+});
+
+test('formatting detects mixed first content, metadata-only thinking and skipped events', () => {
+	const { createUsageParser, MAX_SSE_LINE_LENGTH } = require('../stats');
+	const parser = createUsageParser('text/event-stream', { committed: false });
+	const choices = [
+		{ delta: { reasoning: 'Plan', content: 'First' } },
+		{ delta: { content: ' next', signature: 'opaque' } },
+		{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }
+	];
+	for (const choice of choices) parser.consume(Buffer.from('data: ' + JSON.stringify({ choices: [choice] }) + '\n\n'));
+	parser.consume(Buffer.from(': heartbeat\n\ndata: invalid\n\ndata: ' + 'x'.repeat(MAX_SSE_LINE_LENGTH) + '\n\ndata: [DONE]\n\n'));
+	parser.finish();
+	assert.deepEqual(parser.formatting, { contentChunks: 2, contentNewlines: 0, reasoningAfterContent: 0,
+		mixedReasoningContent: 1, reasoningChunks: 1, toolCallChunks: 1, reasoningIdChunks: 1,
+		parsedEvents: 3, invalidEvents: 1, droppedEvents: 1, eventStream: true });
+});
+
+test('mixed reasoning is completed before the first Markdown fragment without duplicating tools or usage', async () => {
+	const originalEvent = { id: 'chat-test', model: 'test', choices: [
+		{ index: 0, delta: { role: 'assistant', reasoning: '\u601d\u8003', signature: 'sig', content: '**84485528 >', tool_calls: [{ index: 0, id: 'call', function: { name: 'test', arguments: '{}' } }] }, finish_reason: 'tool_calls' },
+		{ index: 1, delta: { content: 'other' }, finish_reason: null }
+	], usage: { completion_tokens: 12 } };
+	const next = { choices: [{ index: 0, delta: { content: ' 84485446**\n\n' } }] };
+	const input = Buffer.from(`data: ${JSON.stringify(originalEvent)}\r\n\r\ndata: ${JSON.stringify(next)}\n\ndata: [DONE]\n\n`);
+	const output = [];
+	let offset = 0;
+	let observed = 0;
+	const body = new ReadableStream({ pull(controller) {
+		if (offset === input.length) controller.close();
+		else controller.enqueue(input.subarray(offset, ++offset));
+	} });
+	const sink = new Writable({ write(chunk, encoding, callback) { output.push(Buffer.from(chunk)); callback(); } });
+	await forwardBody(body, sink, { signal: new AbortController().signal, touch() {} }, chunk => { observed += chunk.length; }, true);
+	assert.equal(observed, input.length);
+	const result = Buffer.concat(output).toString();
+	const events = result.split('\n\n').filter(event => event.startsWith('data: {')).map(event => JSON.parse(event.slice(6)));
+	assert.equal(events.length, 3);
+	assert.deepEqual(events[0].choices, [{ index: 0, delta: { reasoning: '\u601d\u8003', signature: 'sig', role: 'assistant' }, finish_reason: null }]);
+	assert.equal(events[0].usage, undefined);
+	const expected = structuredClone(originalEvent);
+	delete expected.choices[0].delta.reasoning;
+	delete expected.choices[0].delta.signature;
+	delete expected.choices[0].delta.role;
+	assert.deepEqual(events[1], expected);
+	assert.deepEqual(events[2], next);
+	const reported = [];
+	let thinking = false;
+	for (const event of events) {
+		const delta = event.choices.find(choice => choice.index === 0)?.delta;
+		if (delta.reasoning) { reported.push('thinking'); thinking = true; }
+		else if (thinking) { reported.push('done'); thinking = false; }
+		if (delta.content) reported.push(delta.content);
+	}
+	assert.deepEqual(reported, ['thinking', 'done', '**84485528 >', ' 84485446**\n\n']);
+	assert.ok(result.endsWith('data: [DONE]\n\n'));
+});
+
+test('CR-only SSE boundaries split mixed events even across single-byte chunks', async () => {
+	const event = { choices: [{ delta: { reasoning: 'plan', content: 'answer' } }] };
+	const input = Buffer.from(`data: ${JSON.stringify(event)}\r\rdata: [DONE]\r\r`);
+	const output = [];
+	let offset = 0;
+	const body = new ReadableStream({ pull(controller) {
+		if (offset === input.length) controller.close();
+		else controller.enqueue(input.subarray(offset, ++offset));
+	} });
+	const sink = new Writable({ write(chunk, encoding, callback) { output.push(Buffer.from(chunk)); callback(); } });
+	await forwardBody(body, sink, { signal: new AbortController().signal, touch() {} }, () => {}, true);
+	const text = Buffer.concat(output).toString();
+	assert.equal((text.match(/data:/g) || []).length, 3);
+	assert.ok(text.endsWith('data: [DONE]\r\r'));
+	assert.deepEqual(text.split('\n\n').slice(0, 2).map(value => JSON.parse(value.slice(6)).choices[0].delta), [{ reasoning: 'plan' }, { content: 'answer' }]);
+});
+
+test('SSE metadata and metadata-only thinking cannot bypass separation', async () => {
+	for (const field of ['cot_summary', 'reasoning_text', 'reasoning_content', 'reasoning', 'thinking', 'cot_id', 'reasoning_opaque', 'signature']) {
+		const event = { choices: [{ index: 0, delta: { [field]: 'value', content: '正文' }, finish_reason: 'stop' }], usage: { completion_tokens: 1 } };
+		const input = Buffer.from(': keepalive\r\nevent: message\r\nid: 123\r\ndata: ' + JSON.stringify(event) + '\r\n\r\n');
+		const output = [];
+		const body = new ReadableStream({ start(controller) { controller.enqueue(input); controller.close(); } });
+		const sink = new Writable({ write(chunk, encoding, callback) { output.push(Buffer.from(chunk)); callback(); } });
+		await forwardBody(body, sink, { signal: new AbortController().signal, touch() {} }, () => {}, true);
+		const events = Buffer.concat(output).toString().trim().split('\n\n');
+		assert.equal(events.length, 2);
+		for (const value of events) assert.ok(value.startsWith(': keepalive\nevent: message\nid: 123\n'));
+		const parsed = events.map(value => JSON.parse(value.split('\n').find(line => line.startsWith('data:')).slice(5)));
+		assert.deepEqual(parsed[0].choices[0].delta, { [field]: 'value' });
+		assert.deepEqual(parsed[1].choices[0].delta, { content: '正文' });
+		assert.equal(parsed[0].choices[0].finish_reason, null);
+		assert.equal(parsed[0].usage, undefined);
+		assert.equal(parsed[1].choices[0].finish_reason, 'stop');
+	}
+});
+
+test('normalization preserves ordinary, oversized, malformed and incomplete events byte for byte', async () => {
+	const ordinary = 'data: ' + JSON.stringify({ choices: [{ delta: { content: '\u4e2d\u6587\n```js\n```', reasoning: '' } }] }) + '\r\n\r\n';
+	const input = Buffer.from(': heartbeat\n\n' + ordinary + 'data: invalid\n\n' + 'data: ' + 'x'.repeat(1024 * 1024 + 1) + '\n\n' + ordinary + 'data: [DONE]\n\ndata: unfinished');
+	const output = [];
+	let offset = 0;
+	const body = new ReadableStream({ pull(controller) {
+		if (offset === input.length) controller.close();
+		else { controller.enqueue(input.subarray(offset, offset + 137)); offset = Math.min(input.length, offset + 137); }
+	} });
+	const sink = new Writable({ write(chunk, encoding, callback) { output.push(Buffer.from(chunk)); callback(); } });
+	await forwardBody(body, sink, { signal: new AbortController().signal, touch() {} }, () => {}, true);
+	assert.deepEqual(Buffer.concat(output), input);
 });
 
 test('upstream failures reject instead of becoming successful truncated responses', async () => {

@@ -98,8 +98,26 @@ function dashboardHtml(initialState = null) {
         .metric-value { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 19px; font-weight: 750; }
         .metric-detail { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
         #token-detail { white-space: pre-line; overflow-wrap: anywhere; overflow: visible; }
+        .history-bar {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            margin-top: 15px;
+            padding: 7px 9px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--muted);
+            font-size: 10px;
+            white-space: nowrap;
+        }
+        .history-bar strong { flex: 0 0 auto; color: var(--amber); font-size: 11px; }
+        .history-bar .history-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .hover-card {
             display: none;
+            white-space: normal;
             position: absolute;
             top: calc(100% + 6px);
             left: 0;
@@ -233,6 +251,11 @@ function dashboardHtml(initialState = null) {
                 <span class="action-icon">×</span><span class="action-copy"><strong>清除数据</strong><small>删除账号与 Cookie</small></span>
             </button>
         </section>
+        <section class="history-bar">
+            <strong id="history-tokens">--</strong>
+            <span id="history-detail" class="history-meta">正在读取历史统计</span>
+            <span id="history-coverage" class="hover-card">从启用历史统计后累计，断开连接不清零。</span>
+        </section>
         <footer class="footer"><span id="last-check">保活：尚未检查</span><button data-command="refresh">刷新数据</button></footer>
     </main>
     <script nonce="${nonce}">
@@ -251,6 +274,13 @@ function dashboardHtml(initialState = null) {
             return hours ? hours + 'h ' + minutes + 'm' : minutes ? minutes + 'm ' + rest + 's' : rest + 's';
         };
         const formatClock = timestamp => timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--';
+        const formatShort = value => {
+            if (!Number.isFinite(Number(value)) || Number(value) <= 0) return null;
+            const tokens = Number(value);
+            if (tokens >= 1e8) return (tokens / 1e8).toFixed(2) + ' 亿';
+            if (tokens >= 1e4) return (tokens / 1e4).toFixed(1) + ' 万';
+            return formatNumber(tokens);
+        };
         const connected = data => Boolean(data.connectedAt && String(data.status).startsWith('Connected'));
         function renderModels(models) {
             const list = byId('model-list');
@@ -301,6 +331,12 @@ function dashboardHtml(initialState = null) {
             byId('sync-text').textContent = '同步 ' + formatClock(Date.now());
             byId('uptime-value').textContent = isConnected ? formatDuration(Date.now() - data.connectedAt) : '--';
             renderModels(Array.isArray(data.models) ? data.models : []);
+            const history = data.history;
+            byId('history-tokens').textContent = history && (history.inputUsageReports || history.outputUsageReports) ? formatTokens(number(history.tokensIn) + number(history.tokensOut)) + ' tok' : '--';
+            byId('history-detail').textContent = history ? history.inputUsageReports + history.outputUsageReports
+                ? '调用 ' + formatNumber(history.requests) + ' 次 · IN ' + (formatShort(history.tokensIn) ?? '--') + ' · OUT ' + (formatShort(history.tokensOut) ?? '--')
+                : '调用 ' + formatNumber(history.requests) + ' 次 · 等待 usage' : '未连接，无历史统计';
+            byId('history-coverage').textContent = history ? '从启用历史统计后累计，断开不清零。输入报告 ' + formatNumber(history.inputUsageReports) + ' 次，累计 ' + formatTokens(history.tokensIn) + ' IN；输出报告 ' + formatNumber(history.outputUsageReports) + ' 次，累计 ' + formatTokens(history.tokensOut) + ' OUT。无 usage 不估算，历史无法补回。' : '当前连接窗口尚未提供历史统计。';
         }
         document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => vscode.postMessage({ command: button.dataset.command })));
         window.addEventListener('message', event => { if (event.data && event.data.type === 'state') render(event.data.data); });

@@ -96,6 +96,10 @@ Dashboard metric details float downwards with an opaque background without resiz
 
 ## Known Issues
 
+### Historical Usage
+
+The history card persists total chat request attempts and reported input/output tokens in VS Code extension global storage. Counts begin when this feature is installed; previous usage cannot be reconstructed. Requests count once before forwarding, including failed attempts; authentication retries do not count twice. Token totals update when responses settle, and missing usage is not estimated. Disconnecting or clearing account credentials does not erase history. Windows write independent records to avoid overwriting each other's totals; visible observers receive the owner's history snapshot. Storage sharing follows VS Code's profile/global-storage behavior and is not a cross-device account total. Abrupt termination can lose pending writes or unfinished response usage.
+
 - Only one VS Code window can own port 58379; stop the other bridge first.
 - Network failures are not retried automatically — resend the request.
 - Streamed conversations are not replayed after an automatic relogin.

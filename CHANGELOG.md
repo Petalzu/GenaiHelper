@@ -1,5 +1,12 @@
 # Change Log
 
+## [0.0.11]
+
+- Added persistent historical request and token usage totals with a compact dashboard display.
+- Preserved usage history across disconnects and credential clearing, with independent records per window.
+- Updated streaming response handling and added formatting diagnostics.
+- Added regression coverage for historical usage, stream forwarding, and local bridge access.
+
 ## [0.0.10]
 
 - Added multi-select Copilot model management with fixed presets, deduplication, precise deletion and backups.

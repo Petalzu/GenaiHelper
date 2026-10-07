@@ -139,7 +139,7 @@ test('observer synchronizes owner state without opening a server or changing cre
         }
     };
     vm.runInNewContext(source, sandbox);
-    sandbox.module.exports.activate({ subscriptions, secrets: {
+    sandbox.module.exports.activate({ subscriptions, globalState: { keys: () => [], get() {}, update: async () => {} }, secrets: {
         get: () => assert.fail('observer must not read credentials'),
         store: () => assert.fail('observer must not write credentials'),
         delete: () => assert.fail('observer must not delete credentials')
