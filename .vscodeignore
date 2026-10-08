@@ -9,6 +9,8 @@
 !copilot-config.js
 !copilot-models.js
 !genai-models.json
+!model-pricing.json
+!PRICING.md
 !README.md
 !GENAI-README.md
 !LICENSE

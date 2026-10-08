@@ -1,5 +1,13 @@
 # Change Log
 
+## [0.0.12]
+
+- Added per-model token, cache and reference cost details to the dashboard.
+- Added frozen reference pricing for supported models, CNY conversion and DeepSeek peak/off-peak estimates.
+- Applied a 90% cached-input fallback when cache usage is missing or invalid.
+- Stored historical usage in a single summary without repricing previously saved estimates.
+- Added regression coverage for pricing, cache fallback, time boundaries and history persistence.
+
 ## [0.0.11]
 
 - Added persistent historical request and token usage totals with a compact dashboard display.

@@ -1,36 +1,103 @@
 const { StringDecoder } = require('node:string_decoder');
-const { randomUUID } = require('node:crypto');
+const modelPricing = require('./model-pricing.json');
+
+const DEEPSEEK_PRICING = Object.freeze({
+	model: 'DeepSeek-V4.1-Flash', currency: 'USD', checkedAt: '2026-10-08',
+	source: 'https://api-docs.deepseek.com/quick_start/pricing',
+	input: 0.15, cached: 0.003, output: 0.6, peakMultiplier: 2
+});
+const MODEL_FIELDS = ['requests', 'tokensIn', 'tokensOut', 'inputUsageReports', 'outputUsageReports',
+	'cachedTokens', 'cacheInputTokens', 'cacheReports', 'pricedReports', 'costMin', 'costMax',
+	'timedReports', 'peakCost', 'offPeakCost'];
+
+function isPeakTime(timestamp) {
+	const date = new Date(timestamp);
+	const day = date.getUTCDay();
+	const hour = date.getUTCHours();
+	return day >= 1 && day <= 5 && ((hour >= 1 && hour < 4) || (hour >= 6 && hour < 10));
+}
+
+function mergeModelUsage(target, rows) {
+	for (const row of rows || []) {
+		if (!row || typeof row.name !== 'string') continue;
+		const name = target.has(row.name) || target.size < MAX_TRACKED_MODELS ? row.name : '其他模型';
+		const total = target.get(name) || Object.fromEntries(MODEL_FIELDS.map(field => [field, 0]));
+		for (const field of MODEL_FIELDS) {
+			if (Number.isFinite(row[field]) && row[field] >= 0) total[field] += row[field];
+		}
+		target.set(name, total);
+	}
+}
+
+function modelUsageRows(models) {
+	return [...models].map(([name, usage]) => ({ name, ...usage }));
+}
+
+function recordModelUsage(models, request) {
+	if (!request.model) return;
+	if (request.hasInput && !(Number.isSafeInteger(request.cachedTokens) && request.cachedTokens >= 0 && request.cachedTokens <= request.tokensIn)) {
+		request = { ...request, cachedTokens: Math.round(request.tokensIn * 0.9) };
+	}
+	const cacheKnown = request.hasInput && Number.isSafeInteger(request.cachedTokens) &&
+		request.cachedTokens >= 0 && request.cachedTokens <= request.tokensIn;
+	const pricing = request.model === DEEPSEEK_PRICING.model ? DEEPSEEK_PRICING :
+		Object.hasOwn(modelPricing.models, request.model) ? modelPricing.models[request.model] : undefined;
+	const priced = Boolean(pricing && cacheKnown && request.hasOutput);
+	const currencyDivisor = pricing?.currency === 'CNY' ? modelPricing.exchangeRate.CNYPerUSD : 1;
+	const cost = priced ? ((request.tokensIn - request.cachedTokens) * pricing.input +
+		request.cachedTokens * (pricing.cached ?? pricing.input) + request.tokensOut * pricing.output) / 1e6 / currencyDivisor : 0;
+	const multiplier = pricing?.peakMultiplier ?? 1;
+	const timed = priced && (multiplier === 1 || (Number.isFinite(request.startedAt) && Number.isFinite(new Date(request.startedAt).getTime())));
+	const peak = timed && multiplier > 1 && isPeakTime(request.startedAt);
+	const timedCost = cost * (peak ? multiplier : 1);
+	mergeModelUsage(models, [{ name: request.model, requests: 1,
+		tokensIn: request.hasInput ? request.tokensIn : 0, tokensOut: request.hasOutput ? request.tokensOut : 0,
+		inputUsageReports: request.hasInput ? 1 : 0, outputUsageReports: request.hasOutput ? 1 : 0,
+		cachedTokens: cacheKnown ? request.cachedTokens : 0, cacheInputTokens: cacheKnown ? request.tokensIn : 0,
+		cacheReports: cacheKnown ? 1 : 0, pricedReports: priced ? 1 : 0,
+		costMin: timed ? timedCost : cost, costMax: timed ? timedCost : cost * multiplier,
+		timedReports: timed ? 1 : 0, peakCost: peak ? timedCost : 0, offPeakCost: timed && !peak ? timedCost : 0 }]);
+}
+
+const historyStores = new WeakMap();
 
 function createHistory(storage, onError = () => {}) {
-	const prefix = 'usageHistory.v1.';
-	const key = prefix + randomUUID();
-	const own = { requests: 0, tokensIn: 0, tokensOut: 0, inputUsageReports: 0, outputUsageReports: 0 };
-	let pending = Promise.resolve();
+	const key = 'usageHistory.summary.v2';
+	let shared = historyStores.get(storage);
+	if (!shared) {
+		const total = { requests: 0, tokensIn: 0, tokensOut: 0, inputUsageReports: 0, outputUsageReports: 0 };
+		const models = new Map();
+		const saved = storage.get(key);
+		const records = saved ? [saved] : [];
+		for (const record of records) {
+			for (const field of Object.keys(total)) {
+				if (Number.isSafeInteger(record?.[field]) && record[field] >= 0) total[field] += record[field];
+			}
+			mergeModelUsage(models, record?.modelUsage);
+		}
+		shared = { total, models, pending: Promise.resolve() };
+		historyStores.set(storage, shared);
+	}
+	const { total, models } = shared;
+	const snapshot = () => ({ ...total, ...(models.size ? { modelUsage: modelUsageRows(models) } : {}) });
 	const save = () => {
-		const snapshot = { ...own };
-		pending = pending.then(() => storage.update(key, snapshot)).catch(onError);
+		const value = snapshot();
+		shared.pending = shared.pending.then(async () => {
+			await storage.update(key, value);
+		}).catch(onError);
 	};
 	return {
-		start() { own.requests++; save(); },
+		start() { total.requests++; save(); },
 		finish(request) {
 			if (!request || request.historyCommitted) return;
 			request.historyCommitted = true;
-			if (request.hasInput) { own.tokensIn += request.tokensIn; own.inputUsageReports++; }
-			if (request.hasOutput) { own.tokensOut += request.tokensOut; own.outputUsageReports++; }
+			if (request.hasInput) { total.tokensIn += request.tokensIn; total.inputUsageReports++; }
+			if (request.hasOutput) { total.tokensOut += request.tokensOut; total.outputUsageReports++; }
+			recordModelUsage(models, request);
 			save();
 		},
-		snapshot() {
-			const total = { ...own };
-			for (const storedKey of storage.keys()) {
-				if (!storedKey.startsWith(prefix) || storedKey === key) continue;
-				const record = storage.get(storedKey);
-				for (const field of Object.keys(total)) {
-					if (Number.isSafeInteger(record?.[field]) && record[field] >= 0) total[field] += record[field];
-				}
-			}
-			return total;
-		},
-		flush: () => pending
+		snapshot,
+		flush: () => shared.pending
 	};
 }
 const MAX_TRACKED_MODELS = 64;
@@ -49,11 +116,12 @@ function createStats(port) {
 		inputUsageReports: 0,
 		outputUsageReports: 0,
 		models: new Map(),
+		modelUsage: new Map(),
 		otherModels: 0
 	};
 }
 
-function recordRequest(stats, body) {
+function recordRequest(stats, body, startedAt = Date.now()) {
 	if (body === undefined) return undefined;
 	stats.requests++;
 	let model = 'unknown';
@@ -67,11 +135,13 @@ function recordRequest(stats, body) {
 	if (current !== undefined) stats.models.set(model, current + 1);
 	else if (stats.models.size < MAX_TRACKED_MODELS) stats.models.set(model, 1);
 	else stats.otherModels++;
-	return { hasUsage: false, hasInput: false, hasOutput: false, tokensIn: 0, tokensOut: 0, committed: false };
+	return { model, startedAt, hasUsage: false, hasInput: false, hasOutput: false, tokensIn: 0, tokensOut: 0, committed: false };
 }
 
 function applyUsage(requestStats, usage) {
 	if (!usage || !requestStats || requestStats.committed) return;
+	const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens;
+	if (Number.isSafeInteger(cached) && cached >= 0) requestStats.cachedTokens = cached;
 	const tokensIn = Number.isSafeInteger(usage.prompt_tokens) && usage.prompt_tokens >= 0 ? usage.prompt_tokens : null;
 	const tokensOut = Number.isSafeInteger(usage.completion_tokens) && usage.completion_tokens >= 0 ? usage.completion_tokens : null;
 	if (tokensIn === null && tokensOut === null) return;
@@ -83,6 +153,7 @@ function applyUsage(requestStats, usage) {
 function commitRequest(stats, requestStats) {
 	if (!requestStats || requestStats.committed) return false;
 	requestStats.committed = true;
+	recordModelUsage(stats.modelUsage, requestStats);
 	if (requestStats.hasUsage) {
 		stats.usageReports++;
 		stats.tokensIn += requestStats.tokensIn;
@@ -199,6 +270,8 @@ function createUsageParser(contentType, requestStats) {
 }
 
 module.exports = {
+	DEEPSEEK_PRICING,
+	modelUsageRows,
 	createHistory,
 	MAX_TRACKED_MODELS,
 	MAX_SSE_LINE_LENGTH,

@@ -25,10 +25,10 @@ The endpoint remains http://127.0.0.1:58379/v1/chat/completions with compatibili
 3. In VS Code, open **Extensions**, select the **...** menu, then **Install from VSIX...** and choose the downloaded file.
 4. Run **Developer: Reload Window**, then open **GENAI** in the activity bar.
 
-Alternatively, install the v0.0.10 package from a terminal:
+Alternatively, install the v0.0.12 package from a terminal:
 
 ```bash
-code --install-extension genai-login-0.0.10.vsix --force
+code --install-extension genai-login-0.0.12.vsix --force
 ```
 
 Node.js and npm are not required for a Release installation. Microsoft Edge and a valid GENAI account are still required. When upgrading, finish active conversations before reloading: reloading the owner window stops its bridge. Existing saved credentials and settings are retained.

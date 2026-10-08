@@ -1,0 +1,13 @@
+{
+  "checkedAt": "2026-10-08",
+  "unit": "USD per 1M tokens",
+  "exchangeRate": { "CNYPerUSD": 6.711932, "date": "2026-10-07", "source": "https://open.er-api.com/v6/latest/USD" },
+  "models": {
+    "gemma-4-31B-it": { "input": 0.09, "cached": 0.05, "output": 0.34, "source": "https://openrouter.ai/google/gemma-4-31b-it" },
+    "gpt-oss-120b": { "input": 0.037, "output": 0.17, "source": "https://openrouter.ai/openai/gpt-oss-120b" },
+    "Qwen3.8-27B": { "input": 0.425, "cached": 0.085, "output": 2.55, "source": "https://openrouter.ai/qwen/qwen3.8-27b" },
+    "Qwen3.5-397B-A17B": { "input": 0.45, "cached": 0.22, "output": 3, "source": "https://openrouter.ai/qwen/qwen3.5-397b-a17b" },
+    "GLM-5.3-Flash": { "input": 0.15, "cached": 0.03, "output": 0.5, "source": "https://openrouter.ai/z-ai/glm-5.3-flash" },
+    "GLM-OCR": { "currency": "CNY", "input": 0.2, "output": 0.2, "source": "https://docs.bigmodel.cn/cn/guide/start/pricing" }
+  }
+}

@@ -98,6 +98,14 @@ function dashboardHtml(initialState = null) {
         .metric-value { display: block; margin-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 19px; font-weight: 750; }
         .metric-detail { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
         #token-detail { white-space: pre-line; overflow-wrap: anywhere; overflow: visible; }
+        .usage-breakdown { margin-top: 10px; overflow-wrap: anywhere; white-space: normal; }
+        .usage-row { padding: 8px 0; border-top: 1px solid var(--border); }
+        .usage-row strong, .usage-row small { display: block; }
+        .usage-row small { margin-top: 4px; color: var(--muted); line-height: 1.5; }
+        .usage-note { color: var(--muted); white-space: normal; line-height: 1.5; }
+        .usage-hover:hover, .usage-hover:focus-within { z-index: 10; }
+        .usage-hover > .hover-card { top: 100%; pointer-events: auto; max-height: 320px; overflow-y: auto; }
+        .usage-hover:hover > .hover-card, .usage-hover:focus-within > .hover-card { display: block; }
         .history-bar {
             position: relative;
             display: flex;
@@ -205,28 +213,30 @@ function dashboardHtml(initialState = null) {
         <div class="section-label"><span>实时概览</span><span id="sync-text">尚未同步</span></div>
         <section class="metric-grid">
             <div class="metric" tabindex="0">
-                <span class="metric-label">PORT / 端口</span>
-                <strong id="port-value" class="metric-value">--</strong>
-                <small id="port-detail" class="metric-detail">等待连接</small>
-                <span id="port-address" class="hover-card">本地监听地址：等待状态</span>
-            </div>
-            <div class="metric" tabindex="0">
                 <span class="metric-label">UPTIME / 时长</span>
                 <strong id="uptime-value" class="metric-value">--</strong>
                 <small class="metric-detail">从本次连接开始</small>
                 <span class="hover-card">连接保持期间持续更新，不包含断开前的历史时长。</span>
             </div>
-            <div class="metric" tabindex="0">
-                <span class="metric-label">REQUESTS / 请求</span>
-                <strong id="request-value" class="metric-value">0</strong>
-                <small id="request-detail" class="metric-detail">聊天请求</small>
-                <span class="hover-card">统计已转发到 GENAI 的聊天请求，不计入保活探测。</span>
-            </div>
-            <div class="metric" tabindex="0">
-                <span class="metric-label">TOKENS / 消耗</span>
+            <div class="metric usage-hover" tabindex="0">
+                <span class="metric-label">TOKENS / 总用量</span>
                 <strong id="token-value" class="metric-value">--</strong>
                 <small id="token-detail" class="metric-detail">等待上游 usage</small>
-                <span id="token-coverage" class="hover-card">请求结束后累计上游 usage，不估算缺失值。</span>
+                <div class="hover-card" tabindex="0" role="region" aria-label="总用量明细">
+                    <div id="token-breakdown" class="usage-breakdown"></div>
+                </div>
+            </div>
+            <div class="metric" tabindex="0">
+                <span class="metric-label">CACHE / 缓存命中率</span>
+                <strong id="cache-value" class="metric-value">--</strong>
+                <small id="cache-detail" class="metric-detail">等待缓存用量</small>
+                <span class="hover-card">按输入 token 加权的缓存命中率。</span>
+            </div>
+            <div class="metric usage-hover" tabindex="0">
+                <span class="metric-label">AI使用量 / 估算 USD</span>
+                <strong id="cost-value" class="metric-value">--</strong>
+                <small id="cost-detail" class="metric-detail">所有模型合计</small>
+                <div id="cost-breakdown" class="hover-card" tabindex="0" role="region" aria-label="各模型费用"></div>
             </div>
         </section>
         <div class="section-label"><span>使用的模型</span><span id="model-count">0</span></div>
@@ -251,11 +261,13 @@ function dashboardHtml(initialState = null) {
                 <span class="action-icon">×</span><span class="action-copy"><strong>清除数据</strong><small>删除账号与 Cookie</small></span>
             </button>
         </section>
-        <section class="history-bar">
+        <div class="history-bar usage-hover" tabindex="0">
             <strong id="history-tokens">--</strong>
             <span id="history-detail" class="history-meta">正在读取历史统计</span>
-            <span id="history-coverage" class="hover-card">从启用历史统计后累计，断开连接不清零。</span>
-        </section>
+            <div class="hover-card" tabindex="0" role="region" aria-label="历史用量明细">
+                <div id="history-breakdown" class="usage-breakdown"></div>
+            </div>
+        </div>
         <footer class="footer"><span id="last-check">保活：尚未检查</span><button data-command="refresh">刷新数据</button></footer>
     </main>
     <script nonce="${nonce}">
@@ -282,6 +294,34 @@ function dashboardHtml(initialState = null) {
             return formatNumber(tokens);
         };
         const connected = data => Boolean(data.connectedAt && String(data.status).startsWith('Connected'));
+        const money = value => Number(value).toFixed(6);
+        const costText = usage => number(usage.timedReports) === number(usage.pricedReports)
+            ? money(usage.costMin) : money(usage.costMin) + ' ~ ' + money(usage.costMax);
+        const cacheRate = usage => usage.cacheInputTokens > 0 ? (100 * usage.cachedTokens / usage.cacheInputTokens).toFixed(1) + '%' : '--';
+        function renderUsage(id, rows) {
+            const list = byId(id);
+            list.replaceChildren();
+            for (const usage of rows) {
+                const row = document.createElement('div');
+                row.className = 'usage-row';
+                const title = document.createElement('strong');
+                const tokens = number(usage.tokensIn) + number(usage.tokensOut);
+                title.textContent = usage.name + ' · ' + formatNumber(tokens) + ' tok';
+                const detail = document.createElement('small');
+                detail.textContent = 'IN ' + (usage.inputUsageReports ? formatNumber(usage.tokensIn) : '--') + ' / OUT ' + (usage.outputUsageReports ? formatNumber(usage.tokensOut) : '--') +
+                    ' · 缓存命中 ' + cacheRate(usage);
+                const cost = document.createElement('small');
+                cost.textContent = usage.pricedReports ? '估算 USD ' + costText(usage) : '未定价';
+                row.append(title, detail, cost);
+                list.append(row);
+            }
+            if (!rows.length) {
+                const note = document.createElement('p');
+                note.className = 'usage-note';
+                note.textContent = '暂无用量';
+                list.append(note);
+            }
+        }
         function renderModels(models) {
             const list = byId('model-list');
             list.replaceChildren();
@@ -314,17 +354,32 @@ function dashboardHtml(initialState = null) {
             dot.className = 'status-dot ' + (isConnected ? 'connected' : /auth|connect/i.test(statusText) ? 'busy' : /error|failed|retry/i.test(statusText) ? 'error' : '');
             byId('status-text').textContent = isConnected ? '已连接' : statusText === 'Disconnected' ? '未连接' : statusText;
             byId('port-badge').textContent = isConnected ? ':' + data.port : '未监听';
-            byId('port-value').textContent = isConnected ? String(data.port) : '--';
-            byId('port-detail').textContent = isConnected ? '127.0.0.1' : '等待连接';
-            byId('port-address').textContent = '本地监听地址：127.0.0.1:' + data.port;
-            byId('request-value').textContent = formatNumber(data.requests);
-            byId('request-detail').textContent = data.requests ? '已转发聊天请求' : '暂无聊天请求';
             const hasUsage = number(data.usageReports) > 0;
             byId('token-value').textContent = hasUsage ? formatTokens(number(data.tokensIn) + number(data.tokensOut)) : '--';
             const inputKnown = number(data.inputUsageReports ?? data.usageReports) > 0;
             const outputKnown = number(data.outputUsageReports ?? data.usageReports) > 0;
             byId('token-detail').textContent = 'IN 输入：' + (inputKnown ? formatTokens(data.tokensIn) : '--') + '\\nOUT 输出：' + (outputKnown ? formatTokens(data.tokensOut) : '--');
-            byId('token-coverage').textContent = '请求结束后累计上游报告值；输入有报告 ' + number(data.inputUsageReports ?? data.usageReports) + ' 次，输出有报告 ' + number(data.outputUsageReports ?? data.usageReports) + ' 次，完全缺失 ' + number(data.usageMissing) + ' 次。缺失不代表零；总数可能不完整。';
+            const usageRows = Array.isArray(data.modelUsage) ? data.modelUsage : [];
+            renderUsage('token-breakdown', usageRows, number(data.tokensIn) + number(data.tokensOut));
+            const cache = usageRows.reduce((total, usage) => ({ cachedTokens: total.cachedTokens + number(usage.cachedTokens), cacheInputTokens: total.cacheInputTokens + number(usage.cacheInputTokens), cacheReports: total.cacheReports + number(usage.cacheReports) }), { cachedTokens: 0, cacheInputTokens: 0, cacheReports: 0 });
+            byId('cache-value').textContent = cacheRate(cache);
+            byId('cache-detail').textContent = '缓存报告 ' + cache.cacheReports + '/' + number(data.requests) + ' 次';
+            const costs = usageRows.reduce((total, usage) => ({ costMin: total.costMin + number(usage.costMin), costMax: total.costMax + number(usage.costMax), pricedReports: total.pricedReports + number(usage.pricedReports), timedReports: total.timedReports + number(usage.timedReports) }), { costMin: 0, costMax: 0, pricedReports: 0, timedReports: 0 });
+            byId('cost-value').textContent = costs.pricedReports ? costText(costs) : '--';
+            byId('cost-detail').textContent = usageRows.some(usage => !usage.pricedReports) ? '已计价模型合计' : '所有模型合计';
+            const costList = byId('cost-breakdown');
+            costList.replaceChildren();
+            for (const usage of usageRows) {
+                const row = document.createElement('div');
+                row.className = 'usage-row';
+                const title = document.createElement('strong');
+                title.textContent = usage.name;
+                const value = document.createElement('small');
+                value.textContent = usage.pricedReports ? 'USD ' + costText(usage) : '未定价';
+                row.append(title, value);
+                costList.append(row);
+            }
+            if (!usageRows.length) costList.textContent = '暂无用量';
             const keepalive = data.keepalive || {};
             byId('keepalive-text').textContent = keepalive.state === 'healthy' ? '每 60s 检查 Cookie' : keepalive.state === 'checking' ? '正在检查 Cookie' : keepalive.state === 'reauthenticating' ? 'Cookie 过期，正在重认证' : isConnected ? '等待首次保活检查' : '等待连接';
             byId('last-check').textContent = keepalive.lastCheckAt ? '上次保活 ' + formatClock(keepalive.lastCheckAt) : '保活：尚未检查';
@@ -332,11 +387,11 @@ function dashboardHtml(initialState = null) {
             byId('uptime-value').textContent = isConnected ? formatDuration(Date.now() - data.connectedAt) : '--';
             renderModels(Array.isArray(data.models) ? data.models : []);
             const history = data.history;
+            renderUsage('history-breakdown', Array.isArray(history?.modelUsage) ? history.modelUsage : [], number(history?.tokensIn) + number(history?.tokensOut));
             byId('history-tokens').textContent = history && (history.inputUsageReports || history.outputUsageReports) ? formatTokens(number(history.tokensIn) + number(history.tokensOut)) + ' tok' : '--';
             byId('history-detail').textContent = history ? history.inputUsageReports + history.outputUsageReports
                 ? '调用 ' + formatNumber(history.requests) + ' 次 · IN ' + (formatShort(history.tokensIn) ?? '--') + ' · OUT ' + (formatShort(history.tokensOut) ?? '--')
                 : '调用 ' + formatNumber(history.requests) + ' 次 · 等待 usage' : '未连接，无历史统计';
-            byId('history-coverage').textContent = history ? '从启用历史统计后累计，断开不清零。输入报告 ' + formatNumber(history.inputUsageReports) + ' 次，累计 ' + formatTokens(history.tokensIn) + ' IN；输出报告 ' + formatNumber(history.outputUsageReports) + ' 次，累计 ' + formatTokens(history.tokensOut) + ' OUT。无 usage 不估算，历史无法补回。' : '当前连接窗口尚未提供历史统计。';
         }
         document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => vscode.postMessage({ command: button.dataset.command })));
         window.addEventListener('message', event => { if (event.data && event.data.type === 'state') render(event.data.data); });

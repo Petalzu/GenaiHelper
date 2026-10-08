@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const http = require('node:http');
 const { createRequestLifetime, forwardBody, transportCode } = require('./bridge-stream');
 const { dashboardHtml } = require('./dashboard');
-const { createStats, createHistory, recordRequest, commitRequest, createUsageParser } = require('./stats');
+const { createStats, createHistory, recordRequest, commitRequest, createUsageParser, modelUsageRows, DEEPSEEK_PRICING } = require('./stats');
 
 let stopActive;
 
@@ -92,6 +92,8 @@ function activate(context) {
 		usageMissing: stats.usageMissing,
 		inputUsageReports: stats.inputUsageReports,
 		outputUsageReports: stats.outputUsageReports,
+		modelUsage: modelUsageRows(stats.modelUsage),
+		pricing: DEEPSEEK_PRICING,
 		models: [...stats.models].map(([name, requests]) => ({ name, requests })).concat(stats.otherModels ? [{ name: '其他模型', requests: stats.otherModels }] : []),
 		keepalive: { ...keepaliveInfo }
 	});
@@ -148,6 +150,7 @@ function activate(context) {
 		server?.closeAllConnections(); server?.close(); server = undefined;
 		stats.connectedAt = null; stats.requests = 0; stats.tokensIn = 0; stats.tokensOut = 0; stats.usageReports = 0; stats.usageMissing = 0; stats.models.clear(); stats.otherModels = 0;
 		stats.inputUsageReports = 0; stats.outputUsageReports = 0;
+		stats.modelUsage.clear();
 		status('Disconnected');
 	};
 	stopActive = stop;
